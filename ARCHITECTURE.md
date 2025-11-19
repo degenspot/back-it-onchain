@@ -50,48 +50,17 @@ Stack (final):
 ## 2.1 System flow (overview)
 
 ```mermaid
-flowchart LR
-  subgraph Frontend
-    U[User]
-    A[Next.js + OnchainKit]
-    AA[SmartAccount (ERC-4337)]
-  end
-
-  subgraph Backend
-    N[NestJS API]
-    Q[BullMQ / Workers]
-    O[OracleWorker (DexScreener)]
-    R[Relayer/Paymaster Proxy]
-    DB[(Postgres + Redis)]
-    IPFS[IPFS Pinning]
-    VAULT[KMS / Vault]
-    BASEAPI[Base Data API]
-  end
-
-  subgraph Chain
-    C[CallRegistry]
-    M[OutcomeManager]
-    PM[Base Paymaster]
-    USDC[USDC/ERC20]
-  end
-
-  U --> A
-  A --> AA
-  A --> N
-  A --> IPFS
-  N --> DB
-  N --> Q
-  Q --> O
-  O --> VAULT
-  O --> R
-  R --> M
-  AA -->|UserOp| PM
-  PM --> C
-  C --> BASEAPI
-  M --> BASEAPI
-  BASEAPI --> N
-  M --> USDC
-  DB --> A
+flowchart TD
+    User((User)) --> Frontend[Next.js Frontend]
+    Frontend --> Wallet[OnchainKit Embedded Wallet + Passkeys]
+    Wallet --> AA[Smart Account (ERC-4337)]
+    AA --> Contracts[Base L2 Smart Contracts]
+    Contracts --> OracleTrigger[Emit PriceRequest Event]
+    OracleTrigger --> Backend[NestJS Oracle Service]
+    Backend --> PriceSign[EIP-712 Signed Price Data]
+    PriceSign --> Contracts
+    Contracts --> Result[Validate Prediction + Settle Stakes]
+    Result --> Frontend
 ```
 
 ## 2.2 Sequence: Create → Resolve → Payout
