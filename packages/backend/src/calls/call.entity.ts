@@ -36,8 +36,11 @@ export class Call {
   @Column()
   stakeToken: string;
 
-  @Column('decimal')
-  stakeAmount: number;
+  @Column('decimal', { default: 0 })
+  totalStakeYes: number;
+
+  @Column('decimal', { default: 0 })
+  totalStakeNo: number;
 
   @Column('timestamptz')
   startTs: Date;
