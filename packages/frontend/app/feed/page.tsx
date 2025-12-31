@@ -18,14 +18,14 @@ export default function FeedPage() {
         const fetchFeed = async () => {
             setIsLoading(true);
             try {
-                let url = 'http://localhost:3000/feed/for-you';
+                let url = 'http://localhost:3001/feed/for-you';
                 if (activeTab === 'following') {
                     if (!currentUser) {
                         setCalls([]);
                         setIsLoading(false);
                         return;
                     }
-                    url = `http://localhost:3000/feed/following?wallet=${currentUser.wallet}`;
+                    url = `http://localhost:3001/feed/following?wallet=${currentUser.wallet}`;
                 }
 
                 const res = await fetch(url);

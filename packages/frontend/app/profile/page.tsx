@@ -17,7 +17,7 @@ export default function ProfilePage() {
         const fetchSocialStats = async () => {
             if (!currentUser?.wallet) return;
             try {
-                const res = await fetch(`http://localhost:3000/users/${currentUser.wallet}/social`);
+                const res = await fetch(`http://localhost:3001/users/${currentUser.wallet}/social`);
                 if (res.ok) {
                     const data = await res.json();
                     setSocialStats(data);

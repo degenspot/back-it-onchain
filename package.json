@@ -1,0 +1,14 @@
+{
+    "name": "back-it-onchain",
+    "version": "0.0.1",
+    "private": true,
+    "packageManager": "pnpm@9.15.4",
+    "scripts": {
+        "dev": "turbo run dev",
+        "build": "turbo run build",
+        "lint": "turbo run lint"
+    },
+    "devDependencies": {
+        "turbo": "^2.3.3"
+    }
+}

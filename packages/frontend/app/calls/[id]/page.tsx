@@ -67,12 +67,12 @@ export default function CallDetailPage() {
                 {/* Call Header */}
                 <div className="mb-6">
                     <div className="flex items-center gap-2 mb-4">
-                        <div className={`h-10 w-10 rounded-full ${call.creator.avatar} flex items-center justify-center font-bold text-white text-sm`}>
-                            {call.creator.name.substring(0, 2).toUpperCase()}
+                        <div className={`h-10 w-10 rounded-full ${call.creator.avatar || 'bg-primary'} flex items-center justify-center font-bold text-white text-sm`}>
+                            {(call.creator.name || 'Anonymous').substring(0, 2).toUpperCase()}
                         </div>
                         <div>
-                            <div className="font-bold">{call.creator.name}</div>
-                            <div className="text-xs text-muted-foreground">{call.creator.handle} • {call.createdAt}</div>
+                            <div className="font-bold">{call.creator.name || 'Anonymous'}</div>
+                            <div className="text-xs text-muted-foreground">{call.creator.handle || '@anonymous'} • {call.createdAt}</div>
                         </div>
                     </div>
 

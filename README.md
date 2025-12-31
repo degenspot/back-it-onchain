@@ -43,24 +43,20 @@
 
 2.  **Install dependencies**
     ```bash
-    npm install
+    pnpm install
     ```
 
 3.  **Setup Environment Variables**
     -   Copy `.env.example` to `.env` in `packages/backend` and `packages/contracts`.
     -   Copy `.env.local.example` to `.env.local` in `packages/frontend`.
 
-4.  **Start Backend**
+4.  **Start Development**
     ```bash
-    cd packages/backend
-    npm run start:dev
+    pnpm dev
     ```
-
-5.  **Start Frontend**
-    ```bash
-    cd packages/frontend
-    npm run dev
-    ```
+    This starts both frontend and backend concurrently using Turborepo:
+    -   **Frontend**: http://localhost:3000
+    -   **Backend**: http://localhost:3001
 
 ## 📜 License
 

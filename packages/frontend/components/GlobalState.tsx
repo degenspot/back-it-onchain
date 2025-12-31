@@ -103,7 +103,7 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
         if (!address) return;
         setIsLoading(true);
         try {
-            const res = await fetch('http://localhost:3000/auth/login', {
+            const res = await fetch('http://localhost:3001/auth/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ wallet: address }),
@@ -121,7 +121,7 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
         if (!currentUser || !address) return;
         setIsLoading(true);
         try {
-            const res = await fetch(`http://localhost:3000/users/${address}`, {
+            const res = await fetch(`http://localhost:3001/users/${address}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(data),
