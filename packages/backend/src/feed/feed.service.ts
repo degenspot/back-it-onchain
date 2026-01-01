@@ -45,8 +45,8 @@ export class FeedService {
         // Using query builder to sort by calculated total stake
         return this.callRepository.createQueryBuilder('call')
             .leftJoinAndSelect('call.creator', 'creator')
-            .addSelect('(call.totalStakeYes + call.totalStakeNo)', '"totalStake"')
-            .orderBy('"totalStake"', 'DESC')
+            .addSelect('(call.totalStakeYes + call.totalStakeNo)', 'total_stake')
+            .orderBy('total_stake', 'DESC')
             .addOrderBy('call.createdAt', 'DESC')
             .take(limit)
             .skip(offset)

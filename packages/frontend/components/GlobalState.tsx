@@ -151,7 +151,24 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
             const tokenAddress = process.env.NEXT_PUBLIC_MOCK_TOKEN_ADDRESS as `0x${string}`;
             const registryAddress = process.env.NEXT_PUBLIC_CALL_REGISTRY_ADDRESS as `0x${string}`;
 
-            // 1. Approve Token
+            // 1. Upload Metadata to Mock IPFS
+            const metadata = {
+                title: newCallData.title,
+                thesis: newCallData.thesis,
+                asset: newCallData.asset,
+                target: newCallData.target,
+                deadline: newCallData.deadline
+            };
+
+            const ipfsRes = await fetch('http://localhost:3001/calls/ipfs', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(metadata)
+            });
+            const { cid } = await ipfsRes.json();
+            console.log("Uploaded metadata, CID:", cid);
+
+            // 2. Approve Token
             console.log("Approving token...");
             const approveTx = await writeContractAsync({
                 address: tokenAddress,
@@ -163,7 +180,7 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
             // Wait for approval receipt
             await publicClient?.waitForTransactionReceipt({ hash: approveTx });
 
-            // 2. Create Call
+            // 3. Create Call
             console.log("Creating call...");
             const deadlineTimestamp = Math.floor(new Date(newCallData.deadline).getTime() / 1000);
             const createTx = await writeContractAsync({
@@ -176,7 +193,7 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
                     BigInt(deadlineTimestamp), // _endTs
                     tokenAddress, // _tokenAddress (Asset being predicted - using same token for now)
                     stringToHex(newCallData.asset, { size: 32 }), // _pairId (Mocking with asset name)
-                    "QmMockCID" // _ipfsCID (Mocking IPFS)
+                    cid // _ipfsCID (Mocking IPFS)
                 ],
             });
             console.log("Create Call Tx:", createTx);

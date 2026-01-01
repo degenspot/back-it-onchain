@@ -116,6 +116,7 @@ export class IndexerService implements OnModuleInit {
     }
 
     const gateways = [
+      `http://localhost:3001/calls/ipfs/${cid}`,
       `https://gateway.pinata.cloud/ipfs/${cid}`,
       `https://ipfs.io/ipfs/${cid}`,
       `https://dweb.link/ipfs/${cid}`
