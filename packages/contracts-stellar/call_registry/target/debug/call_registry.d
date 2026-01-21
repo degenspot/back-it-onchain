@@ -1,0 +1,1 @@
+C:\Users\g-ekoh\Desktop\back-it-onchain\packages\contracts-stellar\call_registry\target\debug\call_registry.dll: C:\Users\g-ekoh\Desktop\back-it-onchain\packages\contracts-stellar\call_registry\src\lib.rs C:\Users\g-ekoh\Desktop\back-it-onchain\packages\contracts-stellar\call_registry\src\test.rs
