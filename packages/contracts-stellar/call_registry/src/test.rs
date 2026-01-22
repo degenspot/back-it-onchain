@@ -152,7 +152,7 @@ fn test_stake_ended_call() {
     let stake_token_admin = Address::generate(&env);
     let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
     let stake_token = stake_token_contract.address();
-    let stake_token_client = token::Client::new(&env, &stake_token);
+    let _stake_token_client = token::Client::new(&env, &stake_token);
     let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
 
     stake_token_admin_client.mint(&creator, &1000);
