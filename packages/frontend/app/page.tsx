@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { ArrowRight, TrendingUp, ShieldCheck, Users } from 'lucide-react';
+import { ArrowRight, TrendingUp, ShieldCheck, Users } from "lucide-react";
 import { Logo } from "@/components/logo";
+import { WalletConnectButton } from "@/components/WalletConnectButton";
 
 export default function LandingPage() {
   return (
@@ -9,15 +10,13 @@ export default function LandingPage() {
         <div className="container mx-auto px-4 h-16 flex items-center justify-between">
           <Logo />
           <div className="flex items-center gap-4">
-            <Link href="/feed" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
+            <Link
+              href="/feed"
+              className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+            >
               Explore
             </Link>
-            <Link
-              href="/onboarding"
-              className="bg-primary hover:bg-primary/90 text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-            >
-              Connect Wallet
-            </Link>
+            <WalletConnectButton />
           </div>
         </div>
       </header>
@@ -30,7 +29,9 @@ export default function LandingPage() {
           <div className="container mx-auto px-4 relative z-10 text-center">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-secondary/50 border border-border mb-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
               <span className="flex h-2 w-2 rounded-full bg-green-500 animate-pulse"></span>
-              <span className="text-xs font-medium text-muted-foreground">Live on Base Sepolia</span>
+              <span className="text-xs font-medium text-muted-foreground">
+                Live on Base Sepolia
+              </span>
             </div>
 
             <h1 className="text-5xl md:text-7xl font-bold tracking-tight mb-6 bg-clip-text text-transparent bg-gradient-to-b from-white to-white/60">
@@ -39,7 +40,9 @@ export default function LandingPage() {
             </h1>
 
             <p className="text-xl text-muted-foreground max-w-2xl mx-auto mb-10 leading-relaxed">
-              BackIT is the onchain prediction marketplace where reputation is earned, not claimed. Make calls, stake tokens, and prove your alpha.
+              BackIT is the onchain prediction marketplace where reputation is
+              earned, not claimed. Make calls, stake tokens, and prove your
+              alpha.
             </p>
 
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
@@ -87,14 +90,24 @@ export default function LandingPage() {
       <footer className="border-t border-border py-8 bg-card">
         <div className="container mx-auto px-4 flex flex-col md:flex-row items-center justify-between gap-4">
           <Logo size="default" />
-          <p className="text-sm text-muted-foreground">© 2025 BackIT Protocol. All rights reserved.</p>
+          <p className="text-sm text-muted-foreground">
+            © 2025 BackIT Protocol. All rights reserved.
+          </p>
         </div>
       </footer>
     </div>
   );
 }
 
-function FeatureCard({ icon, title, description }: { icon: React.ReactNode; title: string; description: string }) {
+function FeatureCard({
+  icon,
+  title,
+  description,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+}) {
   return (
     <div className="p-6 rounded-2xl bg-card border border-border hover:border-primary/50 transition-colors group">
       <div className="mb-4 p-3 rounded-xl bg-secondary w-fit group-hover:scale-110 transition-transform duration-300">
