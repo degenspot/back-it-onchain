@@ -67,7 +67,7 @@ contract OutcomeManager is EIP712, Ownable {
 
     // Placeholder for withdrawal logic
     // In a full implementation, this would calculate shares and transfer tokens
-    function withdrawPayout(uint256 callId) external {
+    function withdrawPayout(uint256 callId) external view {
         require(settled[callId], "Not settled");
         // Implementation details omitted for brevity
     }

@@ -13,7 +13,7 @@ contract Paymaster is Ownable {
         // uint256 maxCost
     )
         external
-        view
+        pure
         returns (bytes memory context, uint256 validationData)
     {
         // Allow everything for MVP

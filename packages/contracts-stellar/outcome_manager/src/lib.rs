@@ -229,7 +229,7 @@ impl OutcomeManagerContract {
         }
 
         // Get call data
-        let mut calls: Map<u64, CallData> = storage.get(&CALLS).unwrap_or_else(|| Map::new(&env));
+        let calls: Map<u64, CallData> = storage.get(&CALLS).unwrap_or_else(|| Map::new(&env));
         let call_data = calls
             .get(call_id)
             .unwrap_or_else(|| panic!("Call not found"));

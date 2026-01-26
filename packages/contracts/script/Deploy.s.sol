@@ -5,7 +5,7 @@ import {Paymaster} from "../src/Paymaster.sol";
 import {MockToken} from "../src/MockToken.sol";
 import {CallRegistry} from "../src/CallRegistry.sol";
 import {OutcomeManager} from "../src/OutcomeManager.sol";
-import {Script} from "forge-std/Script.sol";
+import {Script, console} from "forge-std/Script.sol";
 
 contract DeployScript is Script {
     function run() external {
