@@ -13,13 +13,10 @@ import {
 import { NotificationsService } from './notifications.service';
 import { Notification } from './notification.entity';
 
-// Simple JWT guard - adjust based on your auth implementation
-const AuthGuard = () => (target: any) => target;
 
 @Controller('notifications')
-@UseGuards(AuthGuard())
 export class NotificationsController {
-  constructor(private readonly notificationsService: NotificationsService) {}
+  constructor(private readonly notificationsService: NotificationsService) { }
 
   @Get()
   async getNotifications(
