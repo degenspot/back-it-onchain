@@ -6,3 +6,4 @@ build
 coverage
 .turbo
 target/
+DRIPS_WAVE_ISSUES.md
