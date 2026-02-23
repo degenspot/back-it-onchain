@@ -287,12 +287,39 @@ describe('OracleService', () => {
   });
 
   describe('Price fetching', () => {
+    let originalFetch: typeof global.fetch;
+
+    beforeEach(() => {
+      originalFetch = global.fetch;
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          pairs: [
+            {
+              priceUsd: '1500.50',
+              baseToken: { symbol: 'TEST' },
+              volume: { h24: 1000 },
+              liquidity: { usd: 5000 },
+            },
+          ],
+        }),
+      });
+    });
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+    });
+
     it('should fetch price for token', async () => {
       const tokenAddress = '0x1234567890123456789012345678901234567890';
       const price = await service.fetchPrice(tokenAddress);
 
       expect(typeof price).toBe('number');
-      expect(price).toBeGreaterThan(0);
+      expect(price).toBe(1500.50);
+      expect(global.fetch).toHaveBeenCalledWith(
+        `https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`,
+        expect.any(Object)
+      );
     });
   });
 });

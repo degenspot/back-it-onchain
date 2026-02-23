@@ -8,7 +8,14 @@ describe('LeaderboardController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [LeaderboardController],
-      providers: [LeaderboardService],
+      providers: [
+        {
+          provide: LeaderboardService,
+          useValue: {
+            getLeaderboard: jest.fn(),
+          },
+        },
+      ],
     }).compile();
 
     controller = module.get<LeaderboardController>(LeaderboardController);
