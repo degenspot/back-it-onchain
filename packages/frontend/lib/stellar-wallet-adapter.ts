@@ -50,15 +50,14 @@ export class StellarWalletAdapter implements WalletAdapter {
   private connected: boolean = false;
 
   constructor() {
-    // Check if we have a stored connection on initialization
-    this.restoreConnection();
+    // Connection restoration should be handled explicitly by the consumer
   }
 
   /**
    * Restore connection from localStorage
    * Called on adapter initialization to maintain state across page refreshes
    */
-  private async restoreConnection(): Promise<void> {
+  public async restoreConnection(): Promise<void> {
     // Check if we're in a browser environment
     if (typeof window === "undefined") return;
 

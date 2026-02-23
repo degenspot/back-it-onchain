@@ -30,6 +30,8 @@ interface StellarWalletContextValue {
   publicKey: string | null;
   isConnected: boolean;
   isFreighterInstalled: boolean;
+  /** True once the Freighter install check has completed (avoids flash of "not detected") */
+  isFreighterCheckComplete: boolean;
 
   // Network state
   network: StellarNetwork;
@@ -55,6 +57,7 @@ const defaultContextValue: StellarWalletContextValue = {
   publicKey: null,
   isConnected: false,
   isFreighterInstalled: false,
+  isFreighterCheckComplete: false,
   network: "TESTNET",
   networkDetails: null,
   isConnecting: false,
@@ -98,6 +101,8 @@ export function StellarWalletProvider({
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [isFreighterInstalled, setIsFreighterInstalled] =
     useState<boolean>(false);
+  const [isFreighterCheckComplete, setIsFreighterCheckComplete] =
+    useState<boolean>(false);
   const [network, setNetwork] = useState<StellarNetwork>("TESTNET");
   const [networkDetails, setNetworkDetails] = useState<NetworkDetails | null>(
     null,
@@ -111,6 +116,7 @@ export function StellarWalletProvider({
     const checkFreighterInstallation = async () => {
       const installed = await StellarWalletAdapter.isFreighterInstalled();
       setIsFreighterInstalled(installed);
+      setIsFreighterCheckComplete(true);
     };
 
     checkFreighterInstallation();
@@ -123,7 +129,9 @@ export function StellarWalletProvider({
   useEffect(() => {
     const restoreConnection = async () => {
       try {
-        // The adapter checks localStorage on initialization
+        // Explicitly restore the connection from storage
+        await adapter.restoreConnection();
+
         if (adapter.isConnected && adapter.getPublicKey()) {
           setPublicKey(adapter.getPublicKey());
           setIsConnected(true);
@@ -238,6 +246,7 @@ export function StellarWalletProvider({
     publicKey,
     isConnected,
     isFreighterInstalled,
+    isFreighterCheckComplete,
     network,
     networkDetails,
     isConnecting,

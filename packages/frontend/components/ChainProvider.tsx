@@ -38,21 +38,17 @@ interface ChainProviderProps {
  * Persists selection to localStorage for cross-page and refresh persistence.
  */
 export function ChainProvider({ children }: ChainProviderProps) {
-  // Initialize state from localStorage if available, otherwise default to "base"
-  const [selectedChain, setSelectedChainState] = useState<Chain>(() => {
-    if (typeof window !== "undefined") {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored === "base" || stored === "stellar") {
-        return stored;
-      }
-    }
-    return "base";
-  });
-
+  // Default to Stellar so users avoid "Wrong Network" modal on first load; sync with storage in effect
+  const [selectedChain, setSelectedChainState] = useState<Chain>("stellar");
   const [isChainLoaded, setIsChainLoaded] = useState(false);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored === "base" || stored === "stellar") {
+        setSelectedChainState(stored);
+      }
+    }
     setIsChainLoaded(true);
   }, []);
 

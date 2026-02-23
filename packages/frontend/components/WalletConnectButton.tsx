@@ -52,6 +52,7 @@ export function WalletConnectButton() {
     publicKey: stellarAddress,
     isConnected: isStellarConnected,
     isFreighterInstalled,
+    isFreighterCheckComplete,
     connect: connectStellar,
     disconnect: disconnectStellar,
     isConnecting: isStellarConnecting,
@@ -258,8 +259,9 @@ export function WalletConnectButton() {
         </button>
       )}
 
-      {/* Freighter Not Installed Warning (Stellar Only) */}
+      {/* Freighter Not Installed Warning (Stellar Only) - only after check completes to avoid flash */}
       {selectedChain === "stellar" &&
+        isFreighterCheckComplete &&
         !isFreighterInstalled &&
         !isStellarConnected && (
           <div className="fixed bottom-4 right-4 max-w-sm p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-lg shadow-lg z-50">

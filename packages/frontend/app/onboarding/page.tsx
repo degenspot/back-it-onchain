@@ -25,7 +25,7 @@ export default function OnboardingPage() {
     const { updateProfile, isLoading, currentUser } = useGlobalState();
 
     // Chain selection
-    const { selectedChain, setSelectedChain } = useChain();
+    const { selectedChain, setSelectedChain, isChainLoaded } = useChain();
 
     // EVM wallet (Base)
     const { isConnected: isEvmConnected } = useAccount();
@@ -34,6 +34,7 @@ export default function OnboardingPage() {
     const {
         isConnected: isStellarConnected,
         isFreighterInstalled,
+        isFreighterCheckComplete,
         connect: connectStellar,
         isConnecting: isStellarConnecting,
         publicKey: stellarAddress,
@@ -59,6 +60,15 @@ export default function OnboardingPage() {
             router.push("/feed");
         }
     }, [currentUser, router]);
+
+    // Wait for chain preference to load to prevent UI flash
+    if (!isChainLoaded) {
+        return (
+            <div className="min-h-screen flex items-center justify-center">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            </div>
+        );
+    }
 
     const handleProfileSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -176,7 +186,7 @@ export default function OnboardingPage() {
                                                 )}
                                             </button>
                                         )}
-                                        {!isFreighterInstalled && !isStellarConnected && (
+                                        {isFreighterCheckComplete && !isFreighterInstalled && !isStellarConnected && (
                                             <p className="text-xs text-yellow-500">
                                                 Freighter not detected.{" "}
                                                 <a

@@ -2,6 +2,7 @@
 
 import { useAccount, useSwitchChain } from 'wagmi';
 import { useEffect } from 'react';
+import { useChain } from './ChainProvider';
 
 // Expected chain ID for local development
 const EXPECTED_CHAIN_ID = 31337; // Anvil localhost
@@ -9,7 +10,10 @@ const EXPECTED_CHAIN_ID = 31337; // Anvil localhost
 export function NetworkGuard({ children }: { children: React.ReactNode }) {
     const { isConnected, chain } = useAccount();
     const { switchChain, isPending, error } = useSwitchChain();
-    const isWrongNetwork = isConnected && chain && chain.id !== EXPECTED_CHAIN_ID;
+    const { selectedChain } = useChain();
+    
+    // Only enforce EVM network if we are on the Base/EVM chain
+    const isWrongNetwork = selectedChain === 'base' && isConnected && chain && chain.id !== EXPECTED_CHAIN_ID;
 
     // Auto-switch effect
     useEffect(() => {

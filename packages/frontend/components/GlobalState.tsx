@@ -53,6 +53,18 @@ const GlobalStateContext = createContext<GlobalStateContextType | undefined>(
   undefined,
 );
 
+const API_BASE_URL = (
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:3001"
+).replace(/\/+$/, "");
+
+const buildApiUrl = (path: string): string => {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `${API_BASE_URL}${normalizedPath}`;
+};
+
+const isNetworkError = (error: unknown): boolean =>
+  error instanceof TypeError && (error as Error).message === "Failed to fetch";
+
 export function GlobalStateProvider({ children }: { children: React.ReactNode }) {
   const [calls, setCalls] = useState<Call[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -70,7 +82,7 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
 
   const fetchCalls = async () => {
     try {
-      const res = await fetch("http://localhost:3001/calls");
+      const res = await fetch(buildApiUrl("/calls"));
       if (!res.ok) throw new Error("Failed to fetch calls");
       const data = await res.json();
 
@@ -82,7 +94,15 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
       }));
       setCalls(mappedCalls);
     } catch (error) {
-      console.error("Failed to fetch calls:", error);
+      if (isNetworkError(error)) {
+        console.warn(
+          "Backend API unreachable at",
+          API_BASE_URL,
+          "- ensure the backend is running (e.g. pnpm --filter backend dev)"
+        );
+      } else {
+        console.error("Failed to fetch calls:", error);
+      }
     }
   };
 
@@ -90,7 +110,7 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
     if (!address) return;
     setIsLoading(true);
     try {
-      const res = await fetch("http://localhost:3001/auth/login", {
+      const res = await fetch(buildApiUrl("/auth/login"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -103,7 +123,15 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
         setCurrentUser(user);
       }
     } catch (error) {
-      console.error("Login failed:", error);
+      if (isNetworkError(error)) {
+        console.warn(
+          "Backend API unreachable at",
+          API_BASE_URL,
+          "- ensure the backend is running (e.g. pnpm --filter backend dev)"
+        );
+      } else {
+        console.error("Login failed:", error);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -113,7 +141,7 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
     if (!address) return;
     setIsLoading(true);
     try {
-      const res = await fetch(`http://localhost:3001/users/${address}`, {
+      const res = await fetch(buildApiUrl(`/users/${encodeURIComponent(address)}`), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -169,7 +197,7 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
         deadline: newCallData.deadline,
       };
 
-      const ipfsRes = await fetch("http://localhost:3001/calls/ipfs", {
+      const ipfsRes = await fetch(buildApiUrl("/calls/ipfs"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(metadata),
