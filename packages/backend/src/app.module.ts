@@ -15,6 +15,7 @@ import { UserFollows } from './users/user-follows.entity';
 import { FeedModule } from './feed/feed.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { Notification } from './notifications/notification.entity';
+import { LeaderboardModule } from './leaderboard/leaderboard.module';
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { Notification } from './notifications/notification.entity';
     UsersModule,
     FeedModule,
     NotificationsModule,
+    LeaderboardModule,
   ],
   controllers: [AppController],
   providers: [AppService],
