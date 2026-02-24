@@ -14,6 +14,7 @@ import {
 import type { Chain } from "viem";
 import { coinbaseWallet, injected } from "wagmi/connectors";
 import { ReactNode, useState } from "react";
+import { Toaster } from "sonner";
 
 import { GlobalStateProvider } from "./GlobalState";
 import { NetworkGuard } from "./NetworkGuard";
@@ -74,6 +75,7 @@ export function Providers(props: {
               <StellarWalletProvider>
                 {/* Global application state */}
                 <GlobalStateProvider>{props.children}</GlobalStateProvider>
+                <Toaster position="top-right" closeButton />
               </StellarWalletProvider>
             </NetworkGuard>
           </OnchainKitProvider>
