@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { CallCard } from './CallCard';
+import { CallCardSkeleton } from './CallCardSkeleton';
 import StakingModal from './StakingModal';
 import RecommendedUsers from './RecommendedUsers';
 
@@ -154,10 +155,12 @@ export function Feed() {
                 </button>
             </div>
 
-            {/* Loading State */}
+            {/* Loading State - Show skeleton loaders */}
             {loading && (
-                <div className="text-center py-8 text-muted-foreground">
-                    Loading calls...
+                <div className="space-y-4">
+                    {Array.from({ length: 5 }).map((_, i) => (
+                        <CallCardSkeleton key={i} />
+                    ))}
                 </div>
             )}
 
