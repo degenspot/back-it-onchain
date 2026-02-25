@@ -1,11 +1,16 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { useWriteContract, usePublicClient, useAccount } from 'wagmi';
-import { parseEther, stringToHex } from 'viem';
+import { useWriteContract, usePublicClient, useAccount, useChainId } from 'wagmi';
+import { parseEther, stringToHex, type Hash } from 'viem';
 import { CallRegistryABI, ERC20ABI } from '../lib/abis';
 import { useChain } from './ChainProvider';
 import { useStellarWallet } from './StellarWalletProvider';
+import {
+  showTxConfirmedToast,
+  showTxFailedToast,
+  showTxSubmittedToast,
+} from './tx-toast';
 
 export interface Call {
   id: string; // callOnchainId
@@ -67,6 +72,22 @@ const buildApiUrl = (path: string): string => {
 const isNetworkError = (error: unknown): boolean =>
   error instanceof TypeError && (error as Error).message === "Failed to fetch";
 
+const isUserRejectedError = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  return (
+    message.includes("user rejected") ||
+    message.includes("user denied") ||
+    message.includes("denied transaction signature") ||
+    message.includes("rejected the request") ||
+    message.includes("cancelled")
+  );
+};
+
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return "Something went wrong while processing this transaction.";
+};
+
 export function GlobalStateProvider({ children }: { children: React.ReactNode }) {
   const [calls, setCalls] = useState<Call[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -77,6 +98,7 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
 
   const { writeContractAsync } = useWriteContract();
   const publicClient = usePublicClient();
+  const chainId = useChainId();
   const { address: evmAddress, isConnected: isEvmConnected } = useAccount();
 
   const { selectedChain } = useChain();
@@ -179,6 +201,52 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
     fetchCalls();
   }, []);
 
+  const trackEvmTransaction = async (params: {
+    submittedTitle: string;
+    confirmedTitle: string;
+    failedTitle: string;
+    write: () => Promise<Hash>;
+  }): Promise<Hash> => {
+    let txHash: Hash | undefined;
+    try {
+      if (!publicClient) {
+        throw new Error("Unable to access chain client. Please reconnect wallet.");
+      }
+
+      txHash = await params.write();
+      showTxSubmittedToast({
+        title: params.submittedTitle,
+        description: "Waiting for onchain confirmation.",
+        hash: txHash,
+        chainId,
+      });
+
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+      if (receipt.status !== "success") {
+        throw new Error("Transaction was mined but reverted.");
+      }
+
+      showTxConfirmedToast({
+        title: params.confirmedTitle,
+        description: "Transaction confirmed onchain.",
+        hash: txHash,
+        chainId,
+      });
+
+      return txHash;
+    } catch (error) {
+      showTxFailedToast({
+        title: isUserRejectedError(error) ? "Tx Rejected" : params.failedTitle,
+        description: isUserRejectedError(error)
+          ? "You rejected this transaction in your wallet."
+          : getErrorMessage(error),
+        hash: txHash,
+        chainId,
+      });
+      throw error;
+    }
+  };
+
   const createCall = async (newCallData: Omit<Call, 'id' | 'creator' | 'status' | 'createdAt' | 'backers' | 'comments' | 'volume' | 'totalStakeYes' | 'totalStakeNo' | 'stakeToken' | 'endTs' | 'conditionJson'>) => {
     if (!currentUser) {
       alert("Please connect wallet first");
@@ -212,30 +280,40 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
       const { cid } = await ipfsRes.json();
 
       // 2. Approve Token
-      const approveTx = await writeContractAsync({
-        address: tokenAddress,
-        abi: ERC20ABI,
-        functionName: "approve",
-        args: [registryAddress, stakeAmount],
+      await trackEvmTransaction({
+        submittedTitle: "Tx Submitted: Token approval",
+        confirmedTitle: "Tx Confirmed: Token approval",
+        failedTitle: "Tx Failed: Token approval",
+        write: () =>
+          writeContractAsync({
+            address: tokenAddress,
+            abi: ERC20ABI,
+            functionName: "approve",
+            args: [registryAddress, stakeAmount],
+          }),
       });
-      await publicClient?.waitForTransactionReceipt({ hash: approveTx });
 
       // 3. Create Call
       const deadlineTimestamp = Math.floor(new Date(newCallData.deadline).getTime() / 1000);
-      const createTx = await writeContractAsync({
-        address: registryAddress,
-        abi: CallRegistryABI,
-        functionName: "createCall",
-        args: [
-          tokenAddress,
-          stakeAmount,
-          BigInt(deadlineTimestamp),
-          tokenAddress,
-          stringToHex(newCallData.asset, { size: 32 }),
-          cid,
-        ],
+      await trackEvmTransaction({
+        submittedTitle: "Tx Submitted: Create call",
+        confirmedTitle: "Tx Confirmed: Create call",
+        failedTitle: "Tx Failed: Create call",
+        write: () =>
+          writeContractAsync({
+            address: registryAddress,
+            abi: CallRegistryABI,
+            functionName: "createCall",
+            args: [
+              tokenAddress,
+              stakeAmount,
+              BigInt(deadlineTimestamp),
+              tokenAddress,
+              stringToHex(newCallData.asset, { size: 32 }),
+              cid,
+            ],
+          }),
       });
-      await publicClient?.waitForTransactionReceipt({ hash: createTx });
 
       // Optimistic Update
       const newCall: Call = {
@@ -262,7 +340,6 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
       setTimeout(fetchCalls, 8000);
     } catch (error) {
       console.error("Failed to create call:", error);
-      alert("Failed to create call. See console for details.");
     } finally {
       setIsLoading(false);
     }
@@ -280,22 +357,32 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
       const tokenAddress = process.env.NEXT_PUBLIC_MOCK_TOKEN_ADDRESS as `0x${string}`;
       const registryAddress = process.env.NEXT_PUBLIC_CALL_REGISTRY_ADDRESS as `0x${string}`;
 
-      const approveTx = await writeContractAsync({
-        address: tokenAddress,
-        abi: ERC20ABI,
-        functionName: "approve",
-        args: [registryAddress, stakeAmount],
+      await trackEvmTransaction({
+        submittedTitle: "Tx Submitted: Token approval",
+        confirmedTitle: "Tx Confirmed: Token approval",
+        failedTitle: "Tx Failed: Token approval",
+        write: () =>
+          writeContractAsync({
+            address: tokenAddress,
+            abi: ERC20ABI,
+            functionName: "approve",
+            args: [registryAddress, stakeAmount],
+          }),
       });
-      await publicClient?.waitForTransactionReceipt({ hash: approveTx });
 
       const position = type === "back";
-      const stakeTx = await writeContractAsync({
-        address: registryAddress,
-        abi: CallRegistryABI,
-        functionName: "stakeOnCall",
-        args: [BigInt(callId), stakeAmount, position],
+      await trackEvmTransaction({
+        submittedTitle: "Tx Submitted: Stake on call",
+        confirmedTitle: "Tx Confirmed: Stake on call",
+        failedTitle: "Tx Failed: Stake on call",
+        write: () =>
+          writeContractAsync({
+            address: registryAddress,
+            abi: CallRegistryABI,
+            functionName: "stakeOnCall",
+            args: [BigInt(callId), stakeAmount, position],
+          }),
       });
-      await publicClient?.waitForTransactionReceipt({ hash: stakeTx });
 
       setCalls((prev) =>
         prev.map((call) => {
@@ -313,7 +400,6 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
       );
     } catch (error) {
       console.error("Failed to stake:", error);
-      alert("Failed to stake. See console for details.");
     } finally {
       setIsLoading(false);
     }
