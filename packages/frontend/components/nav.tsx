@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { Home, Search, PlusSquare, Bell, User } from "lucide-react";
+import { Home, Search, PlusSquare, Bell, User, Briefcase } from "lucide-react";
 import { Logo } from "@/components/logo";
 import { ChainSelector } from "@/components/ChainSelector";
 import { useChain } from "@/components/ChainProvider";
@@ -34,6 +34,7 @@ export function Nav() {
     { icon: Home, label: "Home", href: "/feed" },
     { icon: Search, label: "Explore", href: "/explore" },
     { icon: PlusSquare, label: "Create", href: "/create" },
+    { icon: Briefcase, label: "Portfolio", href: "/portfolio" },
     { icon: Bell, label: "Activity", href: "/activity" },
     { icon: User, label: "Profile", href: "/profile" },
   ];
