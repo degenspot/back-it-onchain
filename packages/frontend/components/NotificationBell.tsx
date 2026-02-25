@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { NotificationDropdown } from './NotificationDropdown';
-import { NotificationData, NotificationItem, MOCK_NOTIFICATIONS } from './NotificationItem';
+import { NotificationData, NotificationItem } from './NotificationItem';
 import { Bell } from 'lucide-react';
 import { useGlobalState } from './GlobalState';
 import { cn } from '@/lib/utils';
@@ -72,14 +72,9 @@ export function NotificationBell({
         const fetchedNotifications = data.notifications || [];
         
         if (page === 1) {
-            if (fetchedNotifications.length === 0) {
-                setNotifications(MOCK_NOTIFICATIONS);
-                setUnreadCount((prev) => prev === 0 ? MOCK_NOTIFICATIONS.filter(n => !n.isRead).length : prev);
-            } else {
-                setNotifications(fetchedNotifications);
-            }
+          setNotifications(fetchedNotifications);
         } else {
-            setNotifications((prev) => [...prev, ...fetchedNotifications]);
+          setNotifications((prev) => [...prev, ...fetchedNotifications]);
         }
         setCurrentPage(page);
         setTotalPages(data.totalPages || 1);
@@ -148,12 +143,7 @@ export function NotificationBell({
 
   // Set up polling for unread count
   useEffect(() => {
-    if (!userWallet) {
-      // For demo purposes, if no wallet is connected, show mock notifications
-      setNotifications(MOCK_NOTIFICATIONS);
-      setUnreadCount(MOCK_NOTIFICATIONS.filter(n => !n.isRead).length);
-      return;
-    }
+    if (!userWallet) return;
 
     fetchUnreadCount();
     const interval = setInterval(fetchUnreadCount, pollingInterval);
@@ -161,9 +151,6 @@ export function NotificationBell({
     return () => clearInterval(interval);
   }, [userWallet, pollingInterval]);
 
-  // If no wallet, we still show the bell with mock data for demo
-  const displayNotifications = userWallet ? notifications : MOCK_NOTIFICATIONS;
-  const displayUnreadCount = userWallet ? unreadCount : MOCK_NOTIFICATIONS.filter(n => !n.isRead).length;
 
   return (
     <div className="relative">
@@ -172,12 +159,12 @@ export function NotificationBell({
         className="relative p-2 text-muted-foreground hover:text-foreground hover:bg-secondary/50 rounded-xl transition-all"
         aria-label="Notifications"
       >
-        <Bell className={cn("h-6 w-6", displayUnreadCount > 0 && "text-primary")} />
+        <Bell className={cn("h-6 w-6", unreadCount > 0 && "text-primary")} />
 
         {/* Unread indicator badge */}
-        {displayUnreadCount > 0 && (
+        {unreadCount > 0 && (
           <span className="absolute top-1.5 right-1.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
-            {displayUnreadCount > 99 ? '99+' : displayUnreadCount}
+            {unreadCount > 99 ? '99+' : unreadCount}
           </span>
         )}
       </button>
@@ -185,13 +172,14 @@ export function NotificationBell({
       <NotificationDropdown
         isOpen={isOpen}
         onClose={() => setIsOpen(false)}
-        notifications={displayNotifications}
-        unreadCount={displayUnreadCount}
+        notifications={notifications}
+        unreadCount={unreadCount}
         isLoading={isLoading}
         onMarkAsRead={handleMarkAsRead}
         onMarkAllRead={handleMarkAllRead}
         onLoadMore={handleLoadMore}
-        hasMore={hasMore && !!userWallet}
+        hasMore={hasMore}
+        isWalletConnected={!!userWallet}
       />
     </div>
   );

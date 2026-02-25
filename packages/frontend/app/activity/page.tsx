@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { AppLayout } from "@/components/AppLayout";
 import { useGlobalState } from "@/components/GlobalState";
-import { NotificationData, NotificationItem, MOCK_NOTIFICATIONS } from "@/components/NotificationItem";
+import { NotificationData, NotificationItem } from "@/components/NotificationItem";
 import { Bell } from "lucide-react";
 
 const API_BASE_URL = (
@@ -38,12 +38,12 @@ export default function ActivityPage() {
                 const fetchedNotifications = data.notifications || [];
                 
                 if (page === 1) {
-                    if (fetchedNotifications.length === 0) {
-                        setNotifications(MOCK_NOTIFICATIONS);
-                        setHasMore(false);
-                    } else {
+                    if (fetchedNotifications.length > 0) {
                         setNotifications(fetchedNotifications);
                         setHasMore(page < (data.totalPages || 1));
+                    } else {
+                        setNotifications([]);
+                        setHasMore(false);
                     }
                 } else {
                     setNotifications((prev) => [...prev, ...fetchedNotifications]);
@@ -81,10 +81,6 @@ export default function ActivityPage() {
     useEffect(() => {
         if (userWallet) {
             fetchNotifications(1);
-        } else {
-            // For demo purposes, if no wallet is connected, show mock notifications
-            setNotifications(MOCK_NOTIFICATIONS);
-            setHasMore(false);
         }
     }, [userWallet]);
 

@@ -27,14 +27,9 @@ export default function ProfilePage() {
                 if (res.ok) {
                     const data = await res.json();
                     setSocialStats(data);
-                } else {
-                    // Fallback for demo
-                    setSocialStats({ followersCount: 124, followingCount: 89 });
                 }
             } catch (error) {
                 console.error("Failed to fetch social stats:", error);
-                // Fallback for demo on network error
-                setSocialStats({ followersCount: 124, followingCount: 89 });
             }
         };
         fetchSocialStats();

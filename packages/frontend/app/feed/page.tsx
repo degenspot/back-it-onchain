@@ -36,47 +36,6 @@ const API_BASE_URL = (
     process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:3001"
 ).replace(/\/+$/, "");
 
-const MOCK_CALLS: Call[] = [
-    {
-        id: "mock-1",
-        title: "ETH will hit $5,000 by end of Q2",
-        thesis: "Institutional adoption and decreased exchange supply will drive price up.",
-        asset: "ETH",
-        target: "$5,000",
-        deadline: "06/30/2026",
-        stake: "1,200 USDC",
-        creator: { wallet: "0x71C7656EC7ab88b098defB751B7401B5f6d8976F", handle: "VitalikFan" },
-        status: "active",
-        createdAt: new Date().toISOString(),
-        backers: 124,
-        comments: 18,
-        volume: "$450,000",
-        totalStakeYes: 320000,
-        totalStakeNo: 130000,
-        stakeToken: "USDC",
-        endTs: Date.now() + 86400000 * 90
-    },
-    {
-        id: "mock-2",
-        title: "Base TVL surpasses Arbitrum by May",
-        thesis: "Coinbase user onboarding and low fees will make Base the dominant L2.",
-        asset: "BASE",
-        target: "TVL > Arbitrum",
-        deadline: "05/15/2026",
-        stake: "850 USDC",
-        creator: { wallet: "0x1234567890123456789012345678901234567890", handle: "L2Watcher" },
-        status: "active",
-        createdAt: new Date(Date.now() - 86400000).toISOString(),
-        backers: 89,
-        comments: 7,
-        volume: "$210,000",
-        totalStakeYes: 150000,
-        totalStakeNo: 60000,
-        stakeToken: "USDC",
-        endTs: Date.now() + 86400000 * 45
-    }
-];
-
 export default function FeedPage() {
     const { currentUser } = useGlobalState();
     const [activeTab, setActiveTab] = useState<'for-you' | 'following'>('for-you');
@@ -124,11 +83,10 @@ export default function FeedPage() {
                     conditionJson: c.conditionJson
                 }));
 
-                setCalls(mappedCalls.length > 0 ? mappedCalls : MOCK_CALLS);
+                setCalls(mappedCalls);
             } catch (error) {
                 console.error("Feed fetch error:", error);
-                // Fallback to mock data on error for demo purposes
-                setCalls(MOCK_CALLS);
+                setCalls([]);
             } finally {
                 setIsLoading(false);
             }

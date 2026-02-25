@@ -15,47 +15,6 @@ export interface NotificationData {
   resourceType?: string;
 }
 
-export const MOCK_NOTIFICATIONS: NotificationData[] = [
-  {
-    id: 'mock-1',
-    type: 'market_resolved',
-    payload: {
-      callTitle: 'ETH price > $4,000 by March',
-      outcome: 'yes',
-      userWon: true,
-    },
-    isRead: false,
-    createdAt: new Date().toISOString(),
-    resourceId: '1',
-    resourceType: 'call',
-  },
-  {
-    id: 'mock-2',
-    type: 'stake_received',
-    payload: {
-      callTitle: 'Base TVL surpasses Arbitrum',
-      staker: '0x1234567890123456789012345678901234567890',
-      amount: '500 USDC',
-      choice: 'yes',
-    },
-    isRead: true,
-    createdAt: new Date(Date.now() - 3600000).toISOString(),
-    resourceId: '2',
-    resourceType: 'call',
-  },
-  {
-    id: 'mock-3',
-    type: 'new_follower',
-    payload: {
-      followerHandle: 'VitalikFan',
-      follower: '0x0987654321098765432109876543210987654321',
-    },
-    isRead: false,
-    createdAt: new Date(Date.now() - 86400000).toISOString(),
-    resourceId: 'vitalikfan',
-    resourceType: 'user',
-  }
-];
 
 
 

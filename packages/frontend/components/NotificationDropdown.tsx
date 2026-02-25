@@ -14,6 +14,7 @@ interface NotificationDropdownProps {
   onMarkAllRead: () => void;
   onLoadMore?: () => void;
   hasMore?: boolean;
+  isWalletConnected?: boolean;
 }
 
 export function NotificationDropdown({
@@ -26,6 +27,7 @@ export function NotificationDropdown({
   onMarkAllRead,
   onLoadMore,
   hasMore,
+  isWalletConnected = true,
 }: NotificationDropdownProps) {
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -80,6 +82,16 @@ export function NotificationDropdown({
           <div className="flex flex-col items-center justify-center py-12 gap-3">
             <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent"></div>
             <p className="text-xs text-muted-foreground animate-pulse">Loading updates...</p>
+          </div>
+        ) : !isWalletConnected ? (
+          <div className="flex flex-col items-center justify-center py-16 px-6 text-center">
+            <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mb-4 text-primary">
+               <Bell className="w-6 h-6" />
+            </div>
+            <p className="text-foreground font-bold text-sm">Wallet Not Connected</p>
+            <p className="text-muted-foreground text-xs mt-1 leading-relaxed">
+              Please connect your wallet to receive and view notifications.
+            </p>
           </div>
         ) : notifications.length > 0 ? (
           <div className="divide-y divide-border/50">

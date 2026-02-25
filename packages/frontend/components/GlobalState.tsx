@@ -65,49 +65,8 @@ const buildApiUrl = (path: string): string => {
 const isNetworkError = (error: unknown): boolean =>
   error instanceof TypeError && (error as Error).message === "Failed to fetch";
 
-const MOCK_CALLS: Call[] = [
-  {
-    id: "1",
-    title: "ETH will hit $5,000 by end of Q2",
-    thesis: "Institutional adoption and decreased exchange supply will drive price up.",
-    asset: "ETH",
-    target: "$5,000",
-    deadline: "06/30/2026",
-    stake: "1,200 USDC",
-    creator: { wallet: "0x71C7656EC7ab88b098defB751B7401B5f6d8976F", handle: "VitalikFan", avatar: "bg-blue-500" },
-    status: "active",
-    createdAt: "2h ago",
-    backers: 124,
-    comments: 18,
-    volume: "$450,000",
-    totalStakeYes: 320000,
-    totalStakeNo: 130000,
-    stakeToken: "USDC",
-    endTs: new Date(Date.now() + 86400000 * 90).toISOString(),
-  },
-  {
-    id: "2",
-    title: "Base TVL surpasses Arbitrum by May",
-    thesis: "Coinbase user onboarding and low fees will make Base the dominant L2.",
-    asset: "BASE",
-    target: "TVL > Arbitrum",
-    deadline: "05/15/2026",
-    stake: "850 USDC",
-    creator: { wallet: "0x1234567890123456789012345678901234567890", handle: "L2Watcher", avatar: "bg-purple-500" },
-    status: "active",
-    createdAt: "1d ago",
-    backers: 89,
-    comments: 7,
-    volume: "$210,000",
-    totalStakeYes: 150000,
-    totalStakeNo: 60000,
-    stakeToken: "USDC",
-    endTs: new Date(Date.now() + 86400000 * 45).toISOString(),
-  }
-];
-
 export function GlobalStateProvider({ children }: { children: React.ReactNode }) {
-  const [calls, setCalls] = useState<Call[]>(MOCK_CALLS);
+  const [calls, setCalls] = useState<Call[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
 
@@ -127,25 +86,20 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
       if (!res.ok) throw new Error("Failed to fetch calls");
       const data = await res.json();
 
-      if (data && data.length > 0) {
-        // map backend data to Call interface
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const mappedCalls: Call[] = data.map((item: any) => ({
-          id: item.callOnchainId || item.id,
-          ...item
-        }));
-        setCalls(mappedCalls);
-      } else {
-        setCalls(MOCK_CALLS);
-      }
+      // map backend data to Call interface
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mappedCalls: Call[] = data.map((item: any) => ({
+        id: item.callOnchainId || item.id,
+        ...item
+      }));
+      setCalls(mappedCalls);
     } catch (error) {
       if (isNetworkError(error)) {
         console.warn(
           "Backend API unreachable at",
           API_BASE_URL,
-          "- using mock calls for demo"
+          "- ensure the backend is running (e.g. pnpm --filter backend dev)"
         );
-        setCalls(MOCK_CALLS);
       } else {
         console.error("Failed to fetch calls:", error);
       }
@@ -235,28 +189,20 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
       const registryAddress = process.env.NEXT_PUBLIC_CALL_REGISTRY_ADDRESS as `0x${string}`;
 
       // 1. Upload Metadata to Mock IPFS
-      let cid = "mock-ipfs-cid-for-demo";
-      try {
-        const metadata = {
-          title: newCallData.title,
-          thesis: newCallData.thesis,
-          asset: newCallData.asset,
-          target: newCallData.target,
-          deadline: newCallData.deadline,
-        };
+      const metadata = {
+        title: newCallData.title,
+        thesis: newCallData.thesis,
+        asset: newCallData.asset,
+        target: newCallData.target,
+        deadline: newCallData.deadline,
+      };
 
-        const ipfsRes = await fetch(buildApiUrl("/calls/ipfs"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(metadata),
-        });
-        if (ipfsRes.ok) {
-          const resData = await ipfsRes.json();
-          cid = resData.cid;
-        }
-      } catch (e) {
-        console.warn("Failed to upload to IPFS, using mock CID for demo", e);
-      }
+      const ipfsRes = await fetch(buildApiUrl("/calls/ipfs"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(metadata),
+      });
+      const { cid } = await ipfsRes.json();
 
       // 2. Approve Token
       const approveTx = await writeContractAsync({
