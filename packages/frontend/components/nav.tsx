@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { Home, Search, PlusSquare, Bell, User, Trophy } from "lucide-react";
+import { Home, Search, PlusSquare, Bell, User, Trophy, Briefcase } from "lucide-react";
 import { Logo } from "@/components/logo";
 import { ChainSelector } from "@/components/ChainSelector";
 import { useChain } from "@/components/ChainProvider";
@@ -35,6 +35,7 @@ export function Nav() {
     { icon: Search, label: "Explore", href: "/explore" },
     { icon: Trophy, label: "Leaderboard", href: "/leaderboard" },
     { icon: PlusSquare, label: "Create", href: "/create" },
+    { icon: Briefcase, label: "Portfolio", href: "/portfolio" },
     { icon: Bell, label: "Activity", href: "/activity" },
     { icon: User, label: "Profile", href: "/profile" },
   ];
