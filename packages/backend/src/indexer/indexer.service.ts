@@ -7,12 +7,14 @@ import { Call } from '../calls/call.entity';
 import { AuthService } from '../auth/auth.service';
 import { RpcExhaustedError, withRetry } from '../common/rpc/rpc-retry.util';
 import { Retryable } from '../decorators/retryable.decorator';
+import { PlatformSettings } from './platform-settings.entity';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const CALL_REGISTRY_ABI = [
   'event CallCreated(uint256 indexed callId, address indexed creator, address stakeToken, uint256 stakeAmount, uint256 startTs, uint256 endTs, address tokenAddress, bytes32 pairId, string ipfsCID)',
   'event StakeAdded(uint256 indexed callId, address indexed staker, bool position, uint256 amount)',
+  'event AdminParamsChanged(uint256 feePercent)',
 ];
 
 /** How long to wait before attempting to reconnect the live listener (ms). */
@@ -37,6 +39,8 @@ export class IndexerService implements OnModuleInit {
     private configService: ConfigService,
     @InjectRepository(Call)
     private callsRepository: Repository<Call>,
+    @InjectRepository(PlatformSettings)
+    private settingsRepository: Repository<PlatformSettings>,
     private authService: AuthService,
   ) {
     const rpcUrl = this.configService.get<string>('BASE_SEPOLIA_RPC_URL');
@@ -133,14 +137,16 @@ export class IndexerService implements OnModuleInit {
       const currentBlock = await this.getBlockNumber();
 
       // queryFilter is already wrapped with @Retryable above
-      const [callCreatedEvents, stakeAddedEvents] = await Promise.all([
+      const [callCreatedEvents, stakeAddedEvents, adminParamsEvents] = await Promise.all([
         this.queryFilter(contract, 'CallCreated', 0, currentBlock),
         this.queryFilter(contract, 'StakeAdded', 0, currentBlock),
+        this.queryFilter(contract, 'AdminParamsChanged', 0, currentBlock),
       ]);
 
       this.logger.log(
-        `Found ${callCreatedEvents.length} historical CallCreated events ` +
-        `and ${stakeAddedEvents.length} StakeAdded events`,
+        `Found ${callCreatedEvents.length} historical CallCreated events, ` +
+        `${stakeAddedEvents.length} StakeAdded events, and ` +
+        `${adminParamsEvents.length} AdminParamsChanged events`,
       );
 
       for (const event of callCreatedEvents) {
@@ -160,6 +166,12 @@ export class IndexerService implements OnModuleInit {
           await this.handleStakeAdded(
             a[0] as bigint, a[1] as string, a[2] as boolean, a[3] as bigint,
           );
+        }
+      }
+
+      for (const event of adminParamsEvents) {
+        if (event.args) {
+          await this.handleAdminParamsChanged(event.args[0] as bigint);
         }
       }
 
@@ -258,6 +270,30 @@ export class IndexerService implements OnModuleInit {
     }
 
     await this.callsRepository.save(call);
+  }
+
+  async handleAdminParamsChanged(feePercent: bigint): Promise<void> {
+    const feeNum = Number(ethers.formatUnits(feePercent, 18));
+    this.logger.log(`Processing AdminParamsChanged: feePercent = ${feeNum}`);
+
+    let settings = await this.settingsRepository.findOne({ where: { id: 1 } });
+    if (!settings) {
+      settings = this.settingsRepository.create({ id: 1, feePercent: feeNum });
+    } else {
+      settings.feePercent = feeNum;
+    }
+
+    await this.settingsRepository.save(settings);
+    this.logger.log(`Platform settings updated: feePercent = ${feeNum}`);
+  }
+
+  async getPlatformSettings(): Promise<PlatformSettings> {
+    let settings = await this.settingsRepository.findOne({ where: { id: 1 } });
+    if (!settings) {
+      // Return default if not populated yet
+      return { id: 1, feePercent: 0, updatedAt: new Date() } as PlatformSettings;
+    }
+    return settings;
   }
 
   // ─── IPFS fetching ─────────────────────────────────────────────────────────
@@ -372,6 +408,12 @@ export class IndexerService implements OnModuleInit {
         );
       },
     );
+
+    void contract.on('AdminParamsChanged', (feePercent: bigint) => {
+      void this.handleAdminParamsChanged(feePercent).catch((err: Error) =>
+        this.logger.error(`Error handling live AdminParamsChanged: ${err.message}`),
+      );
+    });
 
     // Attach a provider-level error handler to detect dropped connections
     this.provider.on('error', (err: Error) => {
