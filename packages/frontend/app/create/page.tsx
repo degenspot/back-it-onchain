@@ -2,7 +2,10 @@
 
 import { AppLayout } from "@/components/AppLayout";
 import { ArrowRight, Calendar, DollarSign, Target, Type } from 'lucide-react';
-import { useState } from "react";
+import * as React from "react";
+import { useForm } from "react-hook-form";
+import { z } from "zod";
+import { zodResolver } from "@hookform/resolvers/zod";
 import { useGlobalState } from "@/components/GlobalState";
 import { useRouter } from "next/navigation";
 import { Loader } from "@/components/ui/Loader";
@@ -11,32 +14,73 @@ export default function CreatePage() {
     const { createCall, isLoading } = useGlobalState();
     const router = useRouter();
 
-    const [formData, setFormData] = useState({
-        title: '',
-        thesis: '',
-        asset: '',
-        target: '',
-        deadline: '',
-        stake: ''
-    });
-
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        await createCall({
-            title: formData.title,
-            thesis: formData.thesis,
-            asset: formData.asset,
-            target: formData.target,
-            deadline: formData.deadline,
-            stake: formData.stake
+    // Dynamic validation for Target Price based on asset (token)
+    const getTargetPriceSchema = (asset: string) => {
+        if (asset.toUpperCase() === "ETH") {
+            return z.string().refine(val => {
+                const num = parseFloat(val.replace(/[^0-9.]/g, ""));
+                return num >= 100 && num <= 100000;
+            }, {
+                message: "Target price for ETH must be between $100 and $100,000"
+            });
+        }
+        return z.string().refine(val => {
+            const num = parseFloat(val.replace(/[^0-9.]/g, ""));
+            return num > 0;
+        }, {
+            message: "Target price must be a positive number"
         });
-        router.push('/feed');
     };
 
-    // Helper to update state based on input name since I didn't add name attributes initially
-    // Ideally we should add name attributes to inputs
-    const handleInputChange = (name: string, value: string) => {
-        setFormData(prev => ({ ...prev, [name]: value }));
+    const CreateCallSchema = z.object({
+        title: z.string().min(5, "Title is required and must be at least 5 characters"),
+        thesis: z.string().optional(),
+        asset: z.string().min(2, "Asset is required"),
+        target: z.string(),
+        deadline: z.string().refine(val => {
+            const date = new Date(val);
+            return date > new Date();
+        }, {
+            message: "End date must be in the future"
+        }),
+        stake: z.string().refine(val => {
+            const num = parseFloat(val);
+            return num > 0;
+        }, {
+            message: "Stake amount must be positive"
+        })
+    });
+
+    const {
+        register,
+        handleSubmit,
+        formState: { errors },
+        watch,
+        setError,
+        clearErrors
+    } = useForm({
+        resolver: zodResolver(CreateCallSchema),
+        mode: "onChange"
+    });
+
+    const asset = watch("asset");
+    const target = watch("target");
+
+    React.useEffect(() => {
+        if (asset && target) {
+            const schema = getTargetPriceSchema(asset);
+            const result = schema.safeParse(target);
+            if (!result.success) {
+                setError("target", { type: "manual", message: result.error.issues[0].message });
+            } else {
+                clearErrors("target");
+            }
+        }
+    }, [asset, target, setError, clearErrors]);
+
+    const onSubmit = async (data: any) => {
+        await createCall(data);
+        router.push('/feed');
     };
 
     const RightSidebar = (
@@ -61,7 +105,7 @@ export default function CreatePage() {
                     <p className="text-muted-foreground">Put your reputation onchain. Make a call.</p>
                 </div>
 
-                <form onSubmit={handleSubmit} className="space-y-6">
+                <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
                     {/* Title */}
                     <div className="space-y-2">
                         <label className="text-sm font-medium flex items-center gap-2">
@@ -72,10 +116,9 @@ export default function CreatePage() {
                             type="text"
                             placeholder="e.g., ETH will flip BTC by 2025"
                             className="w-full bg-secondary/50 border border-border rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
-                            required
-                            value={formData.title}
-                            onChange={(e) => handleInputChange('title', e.target.value)}
+                            {...register("title")}
                         />
+                        {errors.title && <p className="text-red-500 text-xs mt-1">{errors.title.message}</p>}
                     </div>
 
                     {/* Thesis */}
@@ -84,9 +127,9 @@ export default function CreatePage() {
                         <textarea
                             placeholder="Why do you think this will happen?"
                             className="w-full bg-secondary/50 border border-border rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/50 min-h-[100px] resize-none transition-all"
-                            value={formData.thesis}
-                            onChange={(e) => handleInputChange('thesis', e.target.value)}
+                            {...register("thesis")}
                         />
+                        {errors.thesis && <p className="text-red-500 text-xs mt-1">{errors.thesis.message}</p>}
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -100,10 +143,9 @@ export default function CreatePage() {
                                 type="text"
                                 placeholder="e.g., ETH"
                                 className="w-full bg-secondary/50 border border-border rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
-                                required
-                                value={formData.asset}
-                                onChange={(e) => handleInputChange('asset', e.target.value)}
+                                {...register("asset")}
                             />
+                            {errors.asset && <p className="text-red-500 text-xs mt-1">{errors.asset.message}</p>}
                         </div>
 
                         {/* Target Price */}
@@ -116,10 +158,9 @@ export default function CreatePage() {
                                 type="text"
                                 placeholder="e.g., $5,000"
                                 className="w-full bg-secondary/50 border border-border rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
-                                required
-                                value={formData.target}
-                                onChange={(e) => handleInputChange('target', e.target.value)}
+                                {...register("target")}
                             />
+                            {errors.target && <p className="text-red-500 text-xs mt-1">{errors.target.message}</p>}
                         </div>
                     </div>
 
@@ -133,10 +174,9 @@ export default function CreatePage() {
                             <input
                                 type="date"
                                 className="w-full bg-secondary/50 border border-border rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
-                                required
-                                value={formData.deadline}
-                                onChange={(e) => handleInputChange('deadline', e.target.value)}
+                                {...register("deadline")}
                             />
+                            {errors.deadline && <p className="text-red-500 text-xs mt-1">{errors.deadline.message}</p>}
                         </div>
 
                         {/* Stake Amount */}
@@ -149,10 +189,9 @@ export default function CreatePage() {
                                 type="number"
                                 placeholder="100"
                                 className="w-full bg-secondary/50 border border-border rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
-                                required
-                                value={formData.stake}
-                                onChange={(e) => handleInputChange('stake', e.target.value)}
+                                {...register("stake")}
                             />
+                            {errors.stake && <p className="text-red-500 text-xs mt-1">{errors.stake.message}</p>}
                         </div>
                     </div>
 
@@ -177,3 +216,4 @@ export default function CreatePage() {
         </AppLayout>
     );
 }
+// ...existing code...
