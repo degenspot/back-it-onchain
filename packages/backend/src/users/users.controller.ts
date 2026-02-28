@@ -57,6 +57,11 @@ export class UsersController {
     return this.usersService.getSocialStats(wallet);
   }
 
+  @Get(':wallet/referrals')
+  async getReferralStats(@Param('wallet') wallet: string) {
+    return this.usersService.getReferralStats(wallet);
+  }
+
   @Get(':wallet/is-following/:targetWallet')
   async isFollowing(
     @Param('wallet') wallet: string,

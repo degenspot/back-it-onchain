@@ -25,6 +25,9 @@ export class User {
   @Column({ nullable: true })
   avatarCid: string;
 
+  @Column({ nullable: true })
+  referredBy: string;
+
   @Column({ type: 'int', default: 100 })
   reputationScore: number;
 

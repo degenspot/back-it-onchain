@@ -6,18 +6,40 @@ import { ArrowLeft, TrendingUp, Clock, ShieldCheck, Users, MessageSquare, Share2
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { useGlobalState } from "@/components/GlobalState";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Loader } from "@/components/ui/Loader";
 import { PriceChart } from "@/components/PriceChart";
 import { ActivityLog } from "@/components/ActivityLog";
+import { MarketDetailSkeleton } from "@/components/MarketDetailSkeleton";
+import { MarketDetailRightSidebarSkeleton } from "@/components/MarketDetailRightSidebarSkeleton";
 
 export default function CallDetailPage() {
     const params = useParams();
     const id = params?.id as string;
     const { calls, stakeOnCall, isLoading } = useGlobalState();
     const [stakingType, setStakingType] = useState<'back' | 'challenge' | null>(null);
+    const [isFetching, setIsFetching] = useState(true);
 
     const call = calls.find(c => c.id === id);
+
+    // Simulate initial data fetching
+    useEffect(() => {
+        if (calls.length > 0) {
+            // Add a small delay to show skeleton
+            const timer = setTimeout(() => {
+                setIsFetching(false);
+            }, 300);
+            return () => clearTimeout(timer);
+        }
+    }, [calls]);
+
+    if (isFetching) {
+        return (
+            <AppLayout rightSidebar={<MarketDetailRightSidebarSkeleton />}>
+                <MarketDetailSkeleton />
+            </AppLayout>
+        );
+    }
 
     if (!call) {
         return (

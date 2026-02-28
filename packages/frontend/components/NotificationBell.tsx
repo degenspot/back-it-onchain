@@ -2,17 +2,27 @@
 
 import React, { useState, useEffect } from 'react';
 import { NotificationDropdown } from './NotificationDropdown';
-import { NotificationData } from './NotificationItem';
+import { NotificationData, NotificationItem } from './NotificationItem';
+import { Bell } from 'lucide-react';
+import { useGlobalState } from './GlobalState';
+import { cn } from '@/lib/utils';
 
 interface NotificationBellProps {
   userWallet?: string;
   pollingInterval?: number; // in milliseconds, default 30000 (30 seconds)
 }
 
+const API_BASE_URL = (
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:3001"
+).replace(/\/+$/, "");
+
 export function NotificationBell({
-  userWallet,
+  userWallet: propWallet,
   pollingInterval = 30000,
 }: NotificationBellProps) {
+  const { currentUser } = useGlobalState();
+  const userWallet = propWallet || currentUser?.wallet;
+  
   const [isOpen, setIsOpen] = useState(false);
   const [notifications, setNotifications] = useState<NotificationData[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -27,7 +37,7 @@ export function NotificationBell({
 
     try {
       const response = await fetch(
-        'http://localhost:3001/notifications/unread-count',
+        `${API_BASE_URL}/notifications/unread-count`,
         {
           headers: {
             'x-user-wallet': userWallet,
@@ -51,7 +61,7 @@ export function NotificationBell({
     setIsLoading(true);
     try {
       const response = await fetch(
-        `http://localhost:3001/notifications?page=${page}&limit=10`,
+        `${API_BASE_URL}/notifications?page=${page}&limit=10`,
         {
           headers: {
             'x-user-wallet': userWallet,
@@ -61,14 +71,16 @@ export function NotificationBell({
 
       if (response.ok) {
         const data = await response.json();
+        const fetchedNotifications = data.notifications || [];
+        
         if (page === 1) {
-          setNotifications(data.notifications);
+          setNotifications(fetchedNotifications);
         } else {
-          setNotifications((prev) => [...prev, ...data.notifications]);
+          setNotifications((prev) => [...prev, ...fetchedNotifications]);
         }
         setCurrentPage(page);
-        setTotalPages(data.totalPages);
-        setHasMore(page < data.totalPages);
+        setTotalPages(data.totalPages || 1);
+        setHasMore(page < (data.totalPages || 1));
       }
     } catch (error) {
       console.error('Failed to fetch notifications:', error);
@@ -81,7 +93,7 @@ export function NotificationBell({
   const handleMarkAsRead = async (notificationId: string) => {
     if (!userWallet) return;
     try {
-      await fetch(`http://localhost:3001/notifications/${notificationId}/read`, {
+      await fetch(`${API_BASE_URL}/notifications/${notificationId}/read`, {
         method: 'PATCH',
         headers: {
           'x-user-wallet': userWallet,
@@ -103,7 +115,7 @@ export function NotificationBell({
   const handleMarkAllRead = async () => {
     if (!userWallet) return;
     try {
-      await fetch(`http://localhost:3001/notifications/mark-all-read`, {
+      await fetch(`${API_BASE_URL}/notifications/mark-all-read`, {
         method: 'PATCH',
         headers: {
           'x-user-wallet': userWallet,
@@ -141,30 +153,19 @@ export function NotificationBell({
     return () => clearInterval(interval);
   }, [userWallet, pollingInterval]);
 
+
   return (
     <div className="relative">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="relative p-2 text-gray-600 hover:text-indigo-600 transition-colors"
+        className="relative p-2 text-muted-foreground hover:text-foreground hover:bg-secondary/50 rounded-xl transition-all"
         aria-label="Notifications"
       >
-        <svg
-          className="w-6 h-6"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"
-          />
-        </svg>
+        <Bell className={cn("h-6 w-6", unreadCount > 0 && "text-primary")} />
 
         {/* Unread indicator badge */}
         {unreadCount > 0 && (
-          <span className="absolute top-0 right-0 inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none text-white transform translate-x-1/2 -translate-y-1/2 bg-red-600 rounded-full">
+          <span className="absolute top-1.5 right-1.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
             {unreadCount > 99 ? '99+' : unreadCount}
           </span>
         )}
@@ -180,6 +181,7 @@ export function NotificationBell({
         onMarkAllRead={handleMarkAllRead}
         onLoadMore={handleLoadMore}
         hasMore={hasMore}
+        isWalletConnected={!!userWallet}
       />
     </div>
   );

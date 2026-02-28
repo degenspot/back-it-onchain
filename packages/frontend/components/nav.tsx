@@ -3,10 +3,11 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { Home, Search, PlusSquare, Bell, User } from "lucide-react";
+import { Home, Search, PlusSquare, Bell, User, Trophy, Briefcase } from "lucide-react";
 import { Logo } from "@/components/logo";
 import { ChainSelector } from "@/components/ChainSelector";
 import { useChain } from "@/components/ChainProvider";
+import { NotificationBell } from "@/components/NotificationBell";
 
 import { cn } from "@/lib/utils";
 import {
@@ -32,7 +33,9 @@ export function Nav() {
   const navItems = [
     { icon: Home, label: "Home", href: "/feed" },
     { icon: Search, label: "Explore", href: "/explore" },
+    { icon: Trophy, label: "Leaderboard", href: "/leaderboard" },
     { icon: PlusSquare, label: "Create", href: "/create" },
+    { icon: Briefcase, label: "Portfolio", href: "/portfolio" },
     { icon: Bell, label: "Activity", href: "/activity" },
     { icon: User, label: "Profile", href: "/profile" },
   ];
@@ -40,9 +43,10 @@ export function Nav() {
   return (
     <>
       {/* Desktop Sidebar */}
-      <nav className="hidden md:flex sticky top-0 h-screen w-64 border-r border-border flex-col p-4 bg-background z-50 flex-shrink-0">
-        <div className="mb-8 px-2">
+      <nav className="hidden md:flex sticky top-0 h-screen w-64 border-r border-border flex-col p-4 bg-background z-50 shrink-0">
+        <div className="mb-8 px-2 flex justify-between items-center">
           <Logo />
+          <NotificationBell />
         </div>
 
         <div className="flex-1 space-y-2">
@@ -113,7 +117,10 @@ export function Nav() {
       {/* Mobile Top Bar */}
       <div className="md:hidden fixed top-0 left-0 right-0 border-b border-border bg-background/80 backdrop-blur-lg p-4 z-50 flex justify-between items-center">
         <Logo />
-        <ChainSelector />
+        <div className="flex items-center gap-2">
+          <NotificationBell />
+          <ChainSelector />
+        </div>
       </div>
 
       {/* Mobile Bottom Nav */}

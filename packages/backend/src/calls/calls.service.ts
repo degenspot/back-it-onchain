@@ -11,7 +11,7 @@ export class CallsService {
   constructor(
     @InjectRepository(Call)
     private callsRepository: Repository<Call>,
-  ) {}
+  ) { }
 
   async create(callData: Partial<Call>): Promise<Call> {
     const call = this.callsRepository.create(callData);
@@ -29,6 +29,12 @@ export class CallsService {
 
   async findOne(id: number): Promise<Call | null> {
     return this.callsRepository.findOne({ where: { id } });
+  }
+
+  async report(id: number, reason: string): Promise<{ success: boolean; message: string }> {
+    // Standard implementation for logging reports against an ID without a dedicated Database Table
+    console.log(`[Report Received] Call ID: ${id} | Reason: ${reason}`);
+    return { success: true, message: 'Report submitted successfully' };
   }
 
   async uploadIpfs(data: any): Promise<{ cid: string }> {

@@ -32,6 +32,10 @@ interface Call {
     callOnchainId?: string; // Add callOnchainId if it's part of the raw data
 }
 
+const API_BASE_URL = (
+    process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:3001"
+).replace(/\/+$/, "");
+
 export default function FeedPage() {
     const { currentUser } = useGlobalState();
     const [activeTab, setActiveTab] = useState<'for-you' | 'following'>('for-you');
@@ -42,14 +46,14 @@ export default function FeedPage() {
         const fetchFeed = async () => {
             setIsLoading(true);
             try {
-                let url = 'http://localhost:3001/feed/for-you';
+                let url = `${API_BASE_URL}/feed/for-you`;
                 if (activeTab === 'following') {
                     if (!currentUser) {
                         setCalls([]);
                         setIsLoading(false);
                         return;
                     }
-                    url = `http://localhost:3001/feed/following?wallet=${currentUser.wallet}`;
+                    url = `${API_BASE_URL}/feed/following?wallet=${currentUser.wallet}`;
                 }
 
                 const res = await fetch(url);
@@ -82,6 +86,7 @@ export default function FeedPage() {
                 setCalls(mappedCalls);
             } catch (error) {
                 console.error("Feed fetch error:", error);
+                setCalls([]);
             } finally {
                 setIsLoading(false);
             }

@@ -4,7 +4,7 @@ import { Call } from './call.entity';
 
 @Controller('calls')
 export class CallsController {
-  constructor(private readonly callsService: CallsService) {}
+  constructor(private readonly callsService: CallsService) { }
 
   @Post()
   create(@Body() createCallDto: Partial<Call>) {
@@ -19,6 +19,11 @@ export class CallsController {
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.callsService.findOne(+id);
+  }
+
+  @Post(':id/report')
+  report(@Param('id') id: string, @Body('reason') reason: string) {
+    return this.callsService.report(+id, reason);
   }
 
   @Post('ipfs')

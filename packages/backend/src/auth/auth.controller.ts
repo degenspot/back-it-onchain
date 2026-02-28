@@ -7,8 +7,14 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('login')
-  async login(@Body() body: { wallet: string; chain?: ChainType }) {
-    const user = await this.authService.validateUser(body.wallet, body.chain);
+  async login(
+    @Body() body: { wallet: string; chain?: ChainType; referrerWallet?: string },
+  ) {
+    const user = await this.authService.validateUser(
+      body.wallet,
+      body.chain,
+      body.referrerWallet,
+    );
     return user;
   }
 }

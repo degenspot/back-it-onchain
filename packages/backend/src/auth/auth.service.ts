@@ -10,10 +10,25 @@ export class AuthService {
     private usersRepository: Repository<User>,
   ) {}
 
-  async validateUser(wallet: string, chain: ChainType = 'base'): Promise<User> {
+  async validateUser(
+    wallet: string,
+    chain: ChainType = 'base',
+    referrerWallet?: string,
+  ): Promise<User> {
     let user = await this.usersRepository.findOne({ where: { wallet } });
     if (!user) {
-      user = this.usersRepository.create({ wallet, chain });
+      const normalizedReferrer = referrerWallet?.trim();
+      const existingReferrer =
+        normalizedReferrer && normalizedReferrer !== wallet
+          ? await this.usersRepository.findOne({
+              where: { wallet: normalizedReferrer },
+            })
+          : null;
+      user = this.usersRepository.create({
+        wallet,
+        chain,
+        referredBy: existingReferrer?.wallet,
+      });
       await this.usersRepository.save(user);
     } else if (user.chain !== chain) {
       // Update chain if user switches chains

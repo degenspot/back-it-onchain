@@ -88,6 +88,15 @@ export class UsersService {
     return { followersCount, followingCount };
   }
 
+  async getReferralStats(
+    wallet: string,
+  ): Promise<{ successfulReferralCount: number }> {
+    const successfulReferralCount = await this.usersRepository.count({
+      where: { referredBy: wallet },
+    });
+    return { successfulReferralCount };
+  }
+
   async isFollowing(
     followerWallet: string,
     followingWallet: string,

@@ -1,7 +1,7 @@
 "use client";
 
 import { AppLayout } from "@/components/AppLayout";
-import { User, MapPin, Calendar, Link as LinkIcon, Settings } from 'lucide-react';
+import { User, MapPin, Calendar, Link as LinkIcon, Settings, Copy, Check } from 'lucide-react';
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useGlobalState } from "@/components/GlobalState";
@@ -9,26 +9,47 @@ import { useChain } from "@/components/ChainProvider";
 
 import { CallCard } from "@/components/CallCard";
 
+const API_BASE_URL = (
+    process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:3001"
+).replace(/\/+$/, "");
+
 export default function ProfilePage() {
     const { currentUser, calls } = useGlobalState();
     const { selectedChain } = useChain();
-    const [activeTab, setActiveTab] = useState<'created' | 'staked'>('created');
+    const [activeTab, setActiveTab] = useState<'created' | 'staked' | 'referrals'>('created');
     const [socialStats, setSocialStats] = useState({ followersCount: 0, followingCount: 0 });
+    const [referralStats, setReferralStats] = useState({ successfulReferralCount: 0 });
+    const [isCopying, setIsCopying] = useState(false);
+    const [isCopied, setIsCopied] = useState(false);
+    const [origin, setOrigin] = useState("");
 
     useEffect(() => {
-        const fetchSocialStats = async () => {
+        setOrigin(window.location.origin);
+    }, []);
+
+    useEffect(() => {
+        const fetchProfileStats = async () => {
             if (!currentUser?.wallet) return;
             try {
-                const res = await fetch(`http://localhost:3001/users/${currentUser.wallet}/social`);
-                if (res.ok) {
-                    const data = await res.json();
-                    setSocialStats(data);
+                const encodedWallet = encodeURIComponent(currentUser.wallet);
+                const [socialRes, referralRes] = await Promise.all([
+                    fetch(`${API_BASE_URL}/users/${encodedWallet}/social`),
+                    fetch(`${API_BASE_URL}/users/${encodedWallet}/referrals`),
+                ]);
+
+                if (socialRes.ok) {
+                    const socialData = await socialRes.json();
+                    setSocialStats(socialData);
+                }
+                if (referralRes.ok) {
+                    const referralData = await referralRes.json();
+                    setReferralStats(referralData);
                 }
             } catch (error) {
-                console.error("Failed to fetch social stats:", error);
+                console.error("Failed to fetch profile stats:", error);
             }
         };
-        fetchSocialStats();
+        fetchProfileStats();
     }, [currentUser]);
 
     if (!currentUser) {
@@ -42,6 +63,20 @@ export default function ProfilePage() {
     }
 
     const myCalls = calls.filter(call => call.creator?.wallet.toLowerCase() === currentUser.wallet.toLowerCase());
+    const inviteLink = `${origin}/onboarding?ref=${encodeURIComponent(currentUser.wallet)}`;
+
+    const copyInviteLink = async () => {
+        try {
+            setIsCopying(true);
+            await navigator.clipboard.writeText(inviteLink);
+            setIsCopied(true);
+            setTimeout(() => setIsCopied(false), 1800);
+        } catch (error) {
+            console.error("Failed to copy invite link:", error);
+        } finally {
+            setIsCopying(false);
+        }
+    };
 
     const RightSidebar = (
         <div className="space-y-6">
@@ -130,6 +165,15 @@ export default function ProfilePage() {
                         >
                             Staked Calls
                         </button>
+                        <button
+                            onClick={() => setActiveTab('referrals')}
+                            className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 ${activeTab === 'referrals'
+                                ? 'border-primary text-primary'
+                                : 'border-transparent text-muted-foreground hover:text-foreground'
+                                }`}
+                        >
+                            Referrals
+                        </button>
                     </div>
 
                     {/* Content */}
@@ -147,12 +191,41 @@ export default function ProfilePage() {
                                     </Link>
                                 </div>
                             )
-                        ) : (
+                        ) : activeTab === 'staked' ? (
                             <div className="text-center py-10 text-muted-foreground">
                                 <p>No stakes yet.</p>
                                 <Link href="/feed" className="text-primary hover:underline mt-2 inline-block">
                                     Explore markets
                                 </Link>
+                            </div>
+                        ) : (
+                            <div className="rounded-xl border border-border bg-secondary/20 p-4 md:p-6 space-y-4">
+                                <div className="flex flex-col gap-1">
+                                    <h2 className="text-lg font-semibold">Invite Friends</h2>
+                                    <p className="text-sm text-muted-foreground">
+                                        Share your link and track successful signups.
+                                    </p>
+                                </div>
+
+                                <div className="rounded-lg border border-border bg-background/50 p-3 text-xs md:text-sm font-mono break-all">
+                                    {inviteLink}
+                                </div>
+
+                                <button
+                                    onClick={copyInviteLink}
+                                    disabled={isCopying}
+                                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-60"
+                                >
+                                    {isCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                                    {isCopied ? "Copied" : "Copy Invite Link"}
+                                </button>
+
+                                <div className="rounded-lg border border-border bg-background/50 p-4">
+                                    <p className="text-xs uppercase tracking-wide text-muted-foreground mb-1">
+                                        Total Successful Referrals
+                                    </p>
+                                    <p className="text-2xl font-bold">{referralStats.successfulReferralCount}</p>
+                                </div>
                             </div>
                         )}
                     </div>

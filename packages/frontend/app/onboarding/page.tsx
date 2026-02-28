@@ -2,8 +2,8 @@
 
 import { cn } from "@/lib/utils";
 
-import { useState, useEffect } from "react";
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, Suspense } from "react";
+import { useRouter, useSearchParams } from 'next/navigation';
 import { User, CheckCircle2, ArrowRight, Loader2 } from 'lucide-react';
 import { Logo } from "@/components/logo";
 import {
@@ -20,9 +20,24 @@ import { useChain } from "@/components/ChainProvider";
 import { useStellarWallet } from "@/components/StellarWalletProvider";
 
 export default function OnboardingPage() {
+    return (
+        <Suspense
+            fallback={
+                <div className="min-h-screen flex items-center justify-center">
+                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                </div>
+            }
+        >
+            <OnboardingContent />
+        </Suspense>
+    );
+}
+
+function OnboardingContent() {
     const [step, setStep] = useState(1);
     const router = useRouter();
-    const { updateProfile, isLoading, currentUser } = useGlobalState();
+    const searchParams = useSearchParams();
+    const { updateProfile, isLoading, currentUser, setPendingReferrerWallet } = useGlobalState();
 
     // Chain selection
     const { selectedChain, setSelectedChain, isChainLoaded } = useChain();
@@ -53,6 +68,14 @@ export default function OnboardingPage() {
             setStep(2);
         }
     }, [step, isWalletConnected]);
+
+    useEffect(() => {
+        const referrerWallet = searchParams.get("ref");
+        if (!referrerWallet) return;
+        const normalizedReferrer = referrerWallet.trim();
+        if (!normalizedReferrer) return;
+        setPendingReferrerWallet(normalizedReferrer);
+    }, [searchParams, setPendingReferrerWallet]);
 
     // Redirect if user already has a handle
     useEffect(() => {
@@ -306,5 +329,3 @@ function StepIndicator({ current, step }: { current: number; step: number }) {
         </div>
     );
 }
-
-
