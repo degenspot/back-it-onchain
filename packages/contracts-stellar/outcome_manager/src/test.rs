@@ -1,9 +1,9 @@
 #![cfg(test)]
 
-use crate::{OutcomeManagerContract, OutcomeManagerContractClient};
+use crate::{CallData, OutcomeManagerContract, OutcomeManagerContractClient, CALLS};
 use soroban_sdk::{
     testutils::{Address as _, MockAuth, MockAuthInvoke},
-    Address, BytesN, Env, IntoVal,
+    token, Address, BytesN, Env, IntoVal,
 };
 
 #[test]
@@ -21,6 +21,10 @@ fn test_initialize() {
     let random_oracle = BytesN::from_array(&env, &[1; 32]);
     assert!(!client.is_authorized_oracle(&random_oracle));
     assert!(!client.get_is_paused());
+
+    let fee_config = client.get_fee_config_view();
+    assert_eq!(fee_config.basis_points, 0);
+    assert_eq!(fee_config.treasury, owner);
 }
 
 #[test]
@@ -105,18 +109,46 @@ fn test_submit_outcome_success() {
 #[test]
 fn test_withdraw_payout_long_wins() {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register_contract(None, OutcomeManagerContract);
     let client = OutcomeManagerContractClient::new(&env, &contract_id);
 
     let owner = Address::generate(&env);
     let registry = Address::generate(&env);
-    let token = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let user = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_client = token::Client::new(&env, &stake_token);
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
 
     client.initialize(&owner, &registry);
+    client.set_fee_config(&500u32, &treasury);
 
     // Register a call
     let call_id = 1u64;
-    client.register_call(&call_id, &token, &1000u128, &500u128, &1000000u64);
+    client.register_call(&call_id, &stake_token, &1000u128, &500u128, &1000000u64);
+
+    env.as_contract(&contract_id, || {
+        let mut calls: soroban_sdk::Map<u64, CallData> =
+            env.storage().instance().get(&CALLS).unwrap();
+        let mut call_data = calls.get(call_id).unwrap();
+        call_data.settled = true;
+        call_data.outcome = Some(true);
+        call_data.final_price = Some(105u128);
+        calls.set(call_id, call_data);
+        env.storage().instance().set(&CALLS, &calls);
+    });
+
+    stake_token_admin_client.mint(&contract_id, &1500);
+
+    let payout = client.withdraw_payout(&call_id, &user, &100u128, &true);
+
+    assert_eq!(payout, 143u128);
+    assert_eq!(stake_token_client.balance(&user), 143i128);
+    assert_eq!(stake_token_client.balance(&treasury), 7i128);
+    assert_eq!(stake_token_client.balance(&contract_id), 1350i128);
 }
 
 #[test]
@@ -221,4 +253,50 @@ fn test_unpause_requires_owner_auth() {
         },
     }]);
     client.unpause();
+}
+
+#[test]
+fn test_set_fee_config() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, OutcomeManagerContract);
+    let client = OutcomeManagerContractClient::new(&env, &contract_id);
+
+    let owner = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    client.initialize(&owner, &registry);
+    client.set_fee_config(&250u32, &treasury);
+
+    let fee_config = client.get_fee_config_view();
+    assert_eq!(fee_config.basis_points, 250);
+    assert_eq!(fee_config.treasury, treasury);
+}
+
+#[test]
+#[should_panic]
+fn test_set_fee_config_requires_owner_auth() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, OutcomeManagerContract);
+    let client = OutcomeManagerContractClient::new(&env, &contract_id);
+
+    let owner = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    client.initialize(&owner, &registry);
+
+    env.mock_auths(&[MockAuth {
+        address: &attacker,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "set_fee_config",
+            args: (250u32, treasury.clone()).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.set_fee_config(&250u32, &treasury);
 }

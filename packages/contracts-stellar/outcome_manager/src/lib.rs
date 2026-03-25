@@ -1,6 +1,7 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, Symbol,
+    contract, contractimpl, contracttype, symbol_short, token, Address, Bytes, BytesN, Env, Map,
+    Symbol,
 };
 
 const OWNER: Symbol = symbol_short!("OWNER");
@@ -9,6 +10,9 @@ const CALLS: Symbol = symbol_short!("CALLS");
 const WITHDRAWALS: Symbol = symbol_short!("WITHDRAW");
 const CALL_REGISTRY: Symbol = symbol_short!("CALL_REG");
 const IS_PAUSED: Symbol = symbol_short!("PAUSED");
+const FEE_CONFIG: Symbol = symbol_short!("FEE_CFG");
+
+const BASIS_POINTS_DENOMINATOR: i128 = 10_000;
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -29,6 +33,13 @@ pub struct StakeData {
     pub user: Address,
     pub amount: u128,
     pub side: bool, // true = long, false = short
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct FeeConfig {
+    pub basis_points: u32,
+    pub treasury: Address,
 }
 
 #[contracttype]
@@ -59,6 +70,21 @@ impl OutcomeManagerContract {
         }
     }
 
+    fn get_fee_config(env: &Env) -> FeeConfig {
+        env.storage()
+            .persistent()
+            .get(&FEE_CONFIG)
+            .expect("Fee config not set")
+    }
+
+    fn to_i128(value: u128) -> i128 {
+        i128::try_from(value).expect("Value exceeds i128 range")
+    }
+
+    fn to_u128(value: i128) -> u128 {
+        u128::try_from(value).expect("Value must be non-negative")
+    }
+
     /// Initialize the contract with owner and call registry address
     pub fn initialize(env: Env, owner: Address, call_registry: Address) {
         let storage = env.storage().instance();
@@ -84,6 +110,34 @@ impl OutcomeManagerContract {
 
         // Initialize pause flag in persistent storage
         env.storage().persistent().set(&IS_PAUSED, &false);
+
+        env.storage().persistent().set(
+            &FEE_CONFIG,
+            &FeeConfig {
+                basis_points: 0,
+                treasury: owner,
+            },
+        );
+    }
+
+    pub fn set_fee_config(env: Env, basis_points: u32, treasury: Address) {
+        Self::require_owner_auth(&env);
+
+        if basis_points > 10_000 {
+            panic!("Fee basis points cannot exceed 10000");
+        }
+
+        env.storage().persistent().set(
+            &FEE_CONFIG,
+            &FeeConfig {
+                basis_points,
+                treasury,
+            },
+        );
+    }
+
+    pub fn get_fee_config_view(env: Env) -> FeeConfig {
+        Self::get_fee_config(&env)
     }
 
     /// Pause write operations (owner only)
@@ -271,31 +325,59 @@ impl OutcomeManagerContract {
         }
 
         let outcome = call_data.outcome.unwrap();
-        let payout: u128 = if user_side == outcome {
+        let gross_payout: i128 = if user_side == outcome {
             // User won - calculate their share
             let winning_tokens = if outcome {
-                call_data.long_tokens
+                Self::to_i128(call_data.long_tokens)
             } else {
-                call_data.short_tokens
+                Self::to_i128(call_data.short_tokens)
             };
 
             let losing_tokens = if outcome {
-                call_data.short_tokens
+                Self::to_i128(call_data.short_tokens)
             } else {
-                call_data.long_tokens
+                Self::to_i128(call_data.long_tokens)
             };
 
+            let user_stake_i128 = Self::to_i128(user_stake);
+
             // User gets their stake back + their share of losing side
-            user_stake + ((user_stake * losing_tokens) / winning_tokens)
+            user_stake_i128 + ((user_stake_i128 * losing_tokens) / winning_tokens)
         } else {
             // User lost - no payout (their stake is already gone)
             0
         };
 
+        let fee_config = Self::get_fee_config(&env);
+        let fee_amount = if gross_payout > 0 {
+            gross_payout
+                .checked_mul(i128::from(fee_config.basis_points))
+                .expect("Fee multiplication overflow")
+                / BASIS_POINTS_DENOMINATOR
+        } else {
+            0
+        };
+        let net_payout = gross_payout - fee_amount;
+
         // Mark withdrawal as done
         let mut new_withdrawals = withdrawals.clone();
         new_withdrawals.set((call_id, user.clone()), true);
         storage.set(&WITHDRAWALS, &new_withdrawals);
+
+        if net_payout > 0 {
+            let token_client = token::Client::new(&env, &call_data.token);
+            token_client.transfer(&env.current_contract_address(), &user, &net_payout);
+
+            if fee_amount > 0 {
+                token_client.transfer(
+                    &env.current_contract_address(),
+                    &fee_config.treasury,
+                    &fee_amount,
+                );
+            }
+        }
+
+        let payout = Self::to_u128(net_payout);
 
         // Emit event
         env.events().publish(
