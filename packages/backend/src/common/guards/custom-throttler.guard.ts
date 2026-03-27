@@ -3,7 +3,7 @@ import { ThrottlerGuard } from '@nestjs/throttler';
 
 @Injectable()
 export class CustomThrottlerGuard extends ThrottlerGuard {
-  protected async generateKey(context: ExecutionContext, trackerString: string, throttlerName: string): Promise<string> {
+  protected generateKey(context: ExecutionContext, trackerString: string, throttlerName: string): string {
     const req = context.switchToHttp().getRequest();
     const tracker = req.user?.id || req.user?.wallet || req.headers['x-user-wallet'] || req.ip;
     return `${throttlerName}:${tracker}`;
