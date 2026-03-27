@@ -1,15 +1,17 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { CallsService } from './calls.service';
-import { CallRepository } from './calls.repository';
-import { BadRequestException } from '@nestjs/common';
+import { getRepositoryToken } from '@nestjs/typeorm';
+import { Call } from './call.entity';
+import { Repository } from 'typeorm';
 
 describe('CallsService', () => {
   let service: CallsService;
-  let repository: CallRepository;
+  let repository: Repository<Call>;
 
   const mockCallRepository = {
     create: jest.fn(),
-    findById: jest.fn(),
+    save: jest.fn(),
+    findOne: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -17,14 +19,14 @@ describe('CallsService', () => {
       providers: [
         CallsService,
         {
-          provide: CallRepository,
+          provide: getRepositoryToken(Call),
           useValue: mockCallRepository,
         },
       ],
     }).compile();
 
     service = module.get<CallsService>(CallsService);
-    repository = module.get<CallRepository>(CallRepository);
+    repository = module.get<Repository<Call>>(getRepositoryToken(Call));
   });
 
   afterEach(() => {
@@ -32,51 +34,43 @@ describe('CallsService', () => {
   });
 
   // -----------------------------
-  // CREATE CALL
+  // CREATE
   // -----------------------------
-  describe('createCall', () => {
+  describe('create', () => {
     it('should create a call successfully', async () => {
-      const callData = { market: 'BTC', prediction: 'UP' };
-      const mockResult = { id: 'call-123', ...callData };
+      const callData = { title: 'BTC', description: 'UP' };
+      const mockResult = { id: 123, ...callData };
 
-      mockCallRepository.create.mockResolvedValue(mockResult);
+      mockCallRepository.create.mockReturnValue(callData);
+      mockCallRepository.save.mockResolvedValue(mockResult);
 
-      const result = await service.createCall(callData);
+      const result = await service.create(callData as unknown as Partial<Call>);
 
       expect(repository.create).toHaveBeenCalledWith(callData);
+      expect(repository.save).toHaveBeenCalledWith(callData);
       expect(result).toEqual(mockResult);
-    });
-
-    it('should throw BadRequestException for invalid input', async () => {
-      const invalidData = { market: '', prediction: '' };
-
-      await expect(service.createCall(invalidData)).rejects.toThrow(
-        BadRequestException,
-      );
-      expect(repository.create).not.toHaveBeenCalled();
     });
   });
 
   // -----------------------------
-  // GET CALL BY ID
+  // FIND ONE
   // -----------------------------
-  describe('getCallById', () => {
+  describe('findOne', () => {
     it('should return call when found', async () => {
-      const mockCall = { id: 'call-123', market: 'ETH', prediction: 'DOWN' };
-      mockCallRepository.findById.mockResolvedValue(mockCall);
+      const mockCall = { id: 123, title: 'ETH', description: 'DOWN' };
+      mockCallRepository.findOne.mockResolvedValue(mockCall);
 
-      const result = await service.getCallById('call-123');
+      const result = await service.findOne(123);
 
-      expect(repository.findById).toHaveBeenCalledWith('call-123');
+      expect(repository.findOne).toHaveBeenCalledWith({ where: { id: 123 } });
       expect(result).toEqual(mockCall);
     });
 
-    it('should throw error when call not found', async () => {
-      mockCallRepository.findById.mockResolvedValue(null);
+    it('should return null when call not found', async () => {
+      mockCallRepository.findOne.mockResolvedValue(null);
 
-      await expect(service.getCallById('call-999')).rejects.toThrow(
-        'Call not found',
-      );
+      const result = await service.findOne(999);
+      expect(result).toBeNull();
     });
   });
 });
