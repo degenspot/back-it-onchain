@@ -15,6 +15,29 @@ export class UsersService {
     private notificationEventsService: NotificationEventsService,
   ) {}
 
+  async create(data: {
+  wallet: string;
+  handle?: string;
+  bio?: string;
+  displayName?: string;
+  avatarCid?: string;
+}): Promise<User> {
+  const existing = await this.findByWallet(data.wallet);
+  if (existing) {
+    throw new ConflictException('User already exists');
+  }
+
+  if (data.handle) {
+    const handleExists = await this.findByHandle(data.handle);
+    if (handleExists) {
+      throw new ConflictException('Handle already taken');
+    }
+  }
+
+  const user = this.usersRepository.create(data);
+  return this.usersRepository.save(user);
+}
+
   async findByWallet(wallet: string): Promise<User | null> {
     return this.usersRepository.findOne({ where: { wallet } });
   }
