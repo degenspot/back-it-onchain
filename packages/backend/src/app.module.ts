@@ -27,6 +27,7 @@ import { PlatformSettings } from './indexer/platform-settings.entity';
 import { BadgesModule } from './badges/badges.module';
 import { UserBadge } from './badges/badge.entity';
 import { AnalyticsModule } from './analytics/analytics.module';
+import { UploadsModule } from './uploads/uploads.module';
 
 @Module({
   imports: [
@@ -83,6 +84,7 @@ import { AnalyticsModule } from './analytics/analytics.module';
     LeaderboardModule,
     BadgesModule,
     AnalyticsModule,
+    UploadsModule,
   ],
   controllers: [AppController],
   providers: [

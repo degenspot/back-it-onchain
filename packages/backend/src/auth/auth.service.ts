@@ -4,6 +4,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { randomBytes } from 'crypto';
 import { Repository } from 'typeorm';
 import { User, ChainType } from '../users/user.entity';
+import { ethers } from 'ethers';
+import { Keypair, StrKey } from '@stellar/stellar-sdk';
+import nacl from 'tweetnacl';
 
 export interface JwtPayload {
   sub: string;
@@ -106,5 +109,88 @@ export class AuthService {
     } catch {
       throw new UnauthorizedException('Invalid or expired token');
     }
+  }
+
+  /**
+   * Builds the standard sign-in challenge message that the client must sign.
+   * Using a consistent format prevents signature replay across different apps.
+   */
+  buildSignMessage(address: string, nonce: string): string {
+    return `Sign in to Back It Onchain\nAddress: ${address}\nNonce: ${nonce}`;
+  }
+
+  /**
+   * Verifies an EIP-191 personal_sign signature (Base / EVM chains).
+   * Returns true when the recovered signer matches the claimed address.
+   */
+  verifyEip191Signature(address: string, message: string, signature: string): boolean {
+    try {
+      const recovered = ethers.verifyMessage(message, signature);
+      return recovered.toLowerCase() === address.toLowerCase();
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Verifies a raw ed25519 signature for a Stellar address.
+   *
+   * The client signs the UTF-8 encoded challenge message with its secret key
+   * and submits the signature as a hex string.  We derive the public key from
+   * the Stellar G… address and verify with tweetnacl.
+   */
+  verifyStellarSignature(address: string, message: string, signatureHex: string): boolean {
+    try {
+      // Validate that the address is a valid Stellar public key (G… address)
+      if (!StrKey.isValidEd25519PublicKey(address)) {
+        return false;
+      }
+
+      const keypair = Keypair.fromPublicKey(address);
+      const publicKeyBytes = keypair.rawPublicKey(); // 32-byte Uint8Array
+
+      const messageBytes = Buffer.from(message, 'utf8');
+      const signatureBytes = Buffer.from(signatureHex, 'hex');
+
+      return nacl.sign.detached.verify(messageBytes, signatureBytes, publicKeyBytes);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Full verify-and-login flow:
+   *   1. Consumes the single-use nonce for the address.
+   *   2. Verifies the cryptographic signature.
+   *   3. Upserts the user record.
+   *   4. Returns a signed JWT.
+   */
+  async verifySignatureAndLogin(
+    address: string,
+    signature: string,
+    chain: ChainType,
+    referrerWallet?: string,
+  ): Promise<string> {
+    const nonce = this.consumeNonce(address);
+    if (!nonce) {
+      throw new UnauthorizedException('No pending nonce for this address — request a new one');
+    }
+
+    const message = this.buildSignMessage(address, nonce);
+
+    let valid: boolean;
+    if (chain === 'stellar') {
+      valid = this.verifyStellarSignature(address, message, signature);
+    } else {
+      // Covers 'base' and any future EVM chains
+      valid = this.verifyEip191Signature(address, message, signature);
+    }
+
+    if (!valid) {
+      throw new UnauthorizedException('Signature verification failed');
+    }
+
+    const user = await this.validateUser(address, chain, referrerWallet);
+    return this.signJwt(user);
   }
 }
