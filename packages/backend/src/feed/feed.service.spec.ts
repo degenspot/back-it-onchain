@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { In } from 'typeorm';
 import { FeedService } from './feed.service';
 import { Call } from '../calls/call.entity';
 import { StakeActivity } from '../calls/stake-activity.entity';
