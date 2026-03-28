@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { FeedService } from './feed.service';
 import { Call } from '../calls/call.entity';
+import { StakeActivity } from '../calls/stake-activity.entity';
 import { UserFollows } from '../users/user-follows.entity';
 
 const mockCall = (overrides: Partial<Call> = {}): Call =>
@@ -43,6 +44,13 @@ describe('FeedService', () => {
   let userFollowsRepository: {
     find: jest.Mock;
   };
+  let stakeActivityRepository: {
+    createQueryBuilder: jest.Mock;
+  };
+  let cacheManager: {
+    get: jest.Mock;
+    set: jest.Mock;
+  };
 
   // Reusable query builder mock
   const buildQueryBuilderMock = (returnValue: Call[]) => {
@@ -59,6 +67,18 @@ describe('FeedService', () => {
     return qb;
   };
 
+  const buildActivityQueryBuilderMock = (returnValue: Array<any>) => {
+    const qb = {
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue(returnValue),
+    };
+    return qb;
+  };
+
   beforeEach(async () => {
     callRepository = {
       find: jest.fn(),
@@ -67,6 +87,15 @@ describe('FeedService', () => {
 
     userFollowsRepository = {
       find: jest.fn(),
+    };
+
+    stakeActivityRepository = {
+      createQueryBuilder: jest.fn(),
+    };
+
+    cacheManager = {
+      get: jest.fn(),
+      set: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -79,6 +108,14 @@ describe('FeedService', () => {
         {
           provide: getRepositoryToken(UserFollows),
           useValue: userFollowsRepository,
+        },
+        {
+          provide: getRepositoryToken(StakeActivity),
+          useValue: stakeActivityRepository,
+        },
+        {
+          provide: 'CACHE_MANAGER',
+          useValue: cacheManager,
         },
       ],
     }).compile();
@@ -321,6 +358,60 @@ describe('FeedService', () => {
 
       expect(result[0].id).toBe(2);
       expect(result[1].id).toBe(1);
+    });
+  });
+
+  describe('getTrendingFeed', () => {
+    it('returns cached trending results if available', async () => {
+      const trendingItem = {
+        ...mockCall({ id: 1 }),
+        trendingScore: 100,
+        isHot: true,
+        volume24h: 500,
+        participantCount24h: 5,
+      };
+
+      cacheManager.get.mockResolvedValue([trendingItem]);
+
+      const result = await service.getTrendingFeed(10, 0);
+      expect(cacheManager.get).toHaveBeenCalledWith('feed:trending:24h');
+      expect(result).toEqual([trendingItem]);
+    });
+
+    it('computes trending from stake activity when cache miss', async () => {
+      cacheManager.get.mockResolvedValue(null);
+
+      const activityRows = [
+        {
+          callOnchainId: '123',
+          volume24h: '500',
+          participantCount24h: '10',
+        },
+      ];
+
+      const qb = buildActivityQueryBuilderMock(activityRows);
+      stakeActivityRepository.createQueryBuilder.mockReturnValue(qb);
+
+      const call = mockCall({ id: 1, callOnchainId: '123', totalStakeYes: 400, totalStakeNo: 100 });
+      callRepository.find.mockResolvedValue([call]);
+
+      const result = await service.getTrendingFeed(10, 0);
+
+      expect(stakeActivityRepository.createQueryBuilder).toHaveBeenCalledWith('activity');
+      expect(callRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ callOnchainId: In(['123']), isHidden: false }),
+          relations: ['creator'],
+        }),
+      );
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({
+        id: 1,
+        volume24h: 500,
+        participantCount24h: 10,
+        isHot: true,
+      });
+      expect(cacheManager.set).toHaveBeenCalledWith('feed:trending:24h', expect.any(Array), { ttl: 300 });
     });
   });
 });
