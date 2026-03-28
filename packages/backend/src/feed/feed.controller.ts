@@ -24,4 +24,12 @@ export class FeedController {
   ) {
     return this.feedService.getForYouFeed(limit, offset);
   }
+
+  @Get('trending')
+  async getTrending(
+    @Query('limit') limit: number = 20,
+    @Query('offset') offset: number = 0,
+  ) {
+    return this.feedService.getTrendingFeed(limit, offset);
+  }
 }

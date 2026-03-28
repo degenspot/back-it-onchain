@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ethers } from 'ethers';
 import { Call } from '../calls/call.entity';
+import { StakeActivity } from '../calls/stake-activity.entity';
 import { AuthService } from '../auth/auth.service';
 import { RpcExhaustedError, withRetry } from '../common/rpc/rpc-retry.util';
 import { Retryable } from '../decorators/retryable.decorator';
@@ -42,6 +43,8 @@ export class IndexerService implements OnModuleInit {
     private configService: ConfigService,
     @InjectRepository(Call)
     private callsRepository: Repository<Call>,
+    @InjectRepository(StakeActivity)
+    private stakeActivityRepository: Repository<StakeActivity>,
     @InjectRepository(PlatformSettings)
     private settingsRepository: Repository<PlatformSettings>,
     private authService: AuthService,
@@ -293,6 +296,14 @@ export class IndexerService implements OnModuleInit {
     }
 
     await this.callsRepository.save(call);
+
+    // Record the individual stake event for trending analytics.
+    const activity = this.stakeActivityRepository.create({
+      callOnchainId: callId.toString(),
+      stakerWallet: staker,
+      amount: Number(amountFormatted),
+    });
+    await this.stakeActivityRepository.save(activity);
 
     if (emitNotification) {
       this.notificationEventsService.emitStakeReceived({
