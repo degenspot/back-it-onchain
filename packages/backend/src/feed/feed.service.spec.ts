@@ -412,7 +412,7 @@ describe('FeedService', () => {
         participantCount24h: 10,
         isHot: true,
       });
-      expect(cacheManager.set).toHaveBeenCalledWith('feed:trending:24h', expect.any(Array), { ttl: 300 });
+      expect(cacheManager.set).toHaveBeenCalledWith('feed:trending:24h', expect.any(Array), 300);
     });
   });
 });
