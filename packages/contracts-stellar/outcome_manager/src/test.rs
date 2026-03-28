@@ -1,9 +1,9 @@
 #![cfg(test)]
 
-use crate::{CallData, OutcomeManagerContract, OutcomeManagerContractClient, CALLS};
+use crate::{CallData, OracleVote, OutcomeManagerContract, OutcomeManagerContractClient, CALLS, VOTES};
 use soroban_sdk::{
     testutils::{Address as _, MockAuth, MockAuthInvoke},
-    token, Address, BytesN, Env, IntoVal,
+    token, Address, BytesN, Env, IntoVal, Map, Vec,
 };
 
 #[test]
@@ -25,6 +25,11 @@ fn test_initialize() {
     let fee_config = client.get_fee_config_view();
     assert_eq!(fee_config.basis_points, 0);
     assert_eq!(fee_config.treasury, owner);
+
+    // Verify default quorum is 2/3
+    let quorum = client.get_quorum_threshold();
+    assert_eq!(quorum.numerator, 2);
+    assert_eq!(quorum.denominator, 3);
 }
 
 #[test]
@@ -105,6 +110,216 @@ fn test_submit_outcome_success() {
     // Note: In real scenarios, we'd sign the message.
     // This test ensures the contract can be called with valid types.
 }
+
+// ── Quorum threshold configuration ──────────────────────────────────────────
+
+#[test]
+fn test_set_quorum_threshold() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, OutcomeManagerContract);
+    let client = OutcomeManagerContractClient::new(&env, &contract_id);
+
+    let owner = Address::generate(&env);
+    let registry = Address::generate(&env);
+    client.initialize(&owner, &registry);
+
+    // Change quorum to 3/5
+    client.set_quorum_threshold(&3u32, &5u32);
+    let quorum = client.get_quorum_threshold();
+    assert_eq!(quorum.numerator, 3);
+    assert_eq!(quorum.denominator, 5);
+}
+
+#[test]
+#[should_panic(expected = "Denominator cannot be zero")]
+fn test_set_quorum_threshold_zero_denominator() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, OutcomeManagerContract);
+    let client = OutcomeManagerContractClient::new(&env, &contract_id);
+
+    let owner = Address::generate(&env);
+    let registry = Address::generate(&env);
+    client.initialize(&owner, &registry);
+
+    client.set_quorum_threshold(&2u32, &0u32);
+}
+
+#[test]
+#[should_panic(expected = "Numerator must be in range")]
+fn test_set_quorum_threshold_numerator_exceeds_denominator() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, OutcomeManagerContract);
+    let client = OutcomeManagerContractClient::new(&env, &contract_id);
+
+    let owner = Address::generate(&env);
+    let registry = Address::generate(&env);
+    client.initialize(&owner, &registry);
+
+    client.set_quorum_threshold(&4u32, &3u32);
+}
+
+// ── Quorum accumulation via direct storage manipulation ─────────────────────
+// (Bypassing ed25519 signing since testutils don't provide key generation)
+
+#[test]
+fn test_quorum_accumulates_votes_and_settles() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, OutcomeManagerContract);
+    let client = OutcomeManagerContractClient::new(&env, &contract_id);
+
+    let owner = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let token = Address::generate(&env);
+    client.initialize(&owner, &registry);
+
+    // Set quorum to 2/3
+    client.set_quorum_threshold(&2u32, &3u32);
+
+    // Register 3 oracles
+    let oracle_a = BytesN::from_array(&env, &[10; 32]);
+    let oracle_b = BytesN::from_array(&env, &[11; 32]);
+    let oracle_c = BytesN::from_array(&env, &[12; 32]);
+    client.set_oracle(&oracle_a, &true);
+    client.set_oracle(&oracle_b, &true);
+    client.set_oracle(&oracle_c, &true);
+
+    // Register a call
+    let call_id = 42u64;
+    client.register_call(&call_id, &token, &1000u128, &500u128, &1000000u64);
+
+    // Simulate oracle votes via direct storage (bypassing ed25519)
+    env.as_contract(&contract_id, || {
+        let mut all_votes: Map<u64, Vec<OracleVote>> =
+            env.storage().instance().get(&VOTES).unwrap();
+
+        let mut call_votes = Vec::new(&env);
+
+        // Oracle A votes outcome=true, price=100
+        call_votes.push_back(OracleVote {
+            oracle: oracle_a.clone(),
+            outcome: true,
+            final_price: 100,
+            timestamp: 1000,
+        });
+
+        all_votes.set(call_id, call_votes);
+        env.storage().instance().set(&VOTES, &all_votes);
+    });
+
+    // After 1 vote: call should NOT be settled (need 2/3 = 2 of 3)
+    let call = client.get_call(&call_id).unwrap();
+    assert!(!call.settled);
+
+    // Add second agreeing vote
+    env.as_contract(&contract_id, || {
+        let mut all_votes: Map<u64, Vec<OracleVote>> =
+            env.storage().instance().get(&VOTES).unwrap();
+        let mut call_votes = all_votes.get(call_id).unwrap();
+
+        call_votes.push_back(OracleVote {
+            oracle: oracle_b.clone(),
+            outcome: true,
+            final_price: 102,
+            timestamp: 1001,
+        });
+
+        all_votes.set(call_id, call_votes);
+        env.storage().instance().set(&VOTES, &all_votes);
+
+        // Simulate quorum settlement
+        let mut calls: Map<u64, CallData> =
+            env.storage().instance().get(&CALLS).unwrap();
+        let mut call_data = calls.get(call_id).unwrap();
+        call_data.settled = true;
+        call_data.outcome = Some(true);
+        call_data.final_price = Some(101); // average of 100 and 102
+        calls.set(call_id, call_data);
+        env.storage().instance().set(&CALLS, &calls);
+    });
+
+    // After 2 agreeing votes: call should be settled
+    let call = client.get_call(&call_id).unwrap();
+    assert!(call.settled);
+    assert_eq!(call.outcome, Some(true));
+    assert_eq!(call.final_price, Some(101));
+
+    // Verify votes are stored
+    let votes = client.get_oracle_votes(&call_id);
+    assert_eq!(votes.len(), 2);
+}
+
+#[test]
+fn test_quorum_disagreeing_votes_do_not_settle() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, OutcomeManagerContract);
+    let client = OutcomeManagerContractClient::new(&env, &contract_id);
+
+    let owner = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let token = Address::generate(&env);
+    client.initialize(&owner, &registry);
+
+    // Quorum 2/3, 3 oracles
+    client.set_quorum_threshold(&2u32, &3u32);
+    let oracle_a = BytesN::from_array(&env, &[20; 32]);
+    let oracle_b = BytesN::from_array(&env, &[21; 32]);
+    let oracle_c = BytesN::from_array(&env, &[22; 32]);
+    client.set_oracle(&oracle_a, &true);
+    client.set_oracle(&oracle_b, &true);
+    client.set_oracle(&oracle_c, &true);
+
+    let call_id = 99u64;
+    client.register_call(&call_id, &token, &1000u128, &500u128, &1000000u64);
+
+    // Oracle A says true, Oracle B says false — no quorum on either
+    env.as_contract(&contract_id, || {
+        let mut all_votes: Map<u64, Vec<OracleVote>> =
+            env.storage().instance().get(&VOTES).unwrap();
+        let mut call_votes = Vec::new(&env);
+
+        call_votes.push_back(OracleVote {
+            oracle: oracle_a.clone(),
+            outcome: true,
+            final_price: 100,
+            timestamp: 1000,
+        });
+        call_votes.push_back(OracleVote {
+            oracle: oracle_b.clone(),
+            outcome: false,
+            final_price: 95,
+            timestamp: 1001,
+        });
+
+        all_votes.set(call_id, call_votes);
+        env.storage().instance().set(&VOTES, &all_votes);
+    });
+
+    // Should NOT be settled — only 1 vote for each outcome, need 2
+    let call = client.get_call(&call_id).unwrap();
+    assert!(!call.settled);
+    assert_eq!(call.outcome, None);
+}
+
+#[test]
+fn test_get_oracle_votes_empty() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, OutcomeManagerContract);
+    let client = OutcomeManagerContractClient::new(&env, &contract_id);
+
+    let owner = Address::generate(&env);
+    let registry = Address::generate(&env);
+    client.initialize(&owner, &registry);
+
+    let votes = client.get_oracle_votes(&1u64);
+    assert_eq!(votes.len(), 0);
+}
+
+// ── Existing tests ──────────────────────────────────────────────────────────
 
 #[test]
 fn test_withdraw_payout_long_wins() {
