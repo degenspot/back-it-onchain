@@ -3,13 +3,33 @@
  * Use these types for off-chain interactions
  */
 
+/** Mirrors Rust `CallLifecycle` (Soroban `contracttype`). */
+export type CallLifecycle =
+  | { Open: Record<string, never> }
+  | {
+      Proposed: {
+        outcome: boolean;
+        final_price: bigint;
+        window_end_ts: bigint;
+      };
+    }
+  | {
+      Disputed: {
+        proposed_outcome: boolean;
+        proposed_final_price: bigint;
+        disputer: string;
+        bond: bigint;
+      };
+    }
+  | { Settled: Record<string, never> };
+
 export interface CallData {
   id: bigint;
   token: string;
   long_tokens: bigint;
   short_tokens: bigint;
   end_ts: bigint;
-  settled: boolean;
+  lifecycle: CallLifecycle;
   outcome: boolean | null;
   final_price: bigint | null;
 }
@@ -32,10 +52,32 @@ export interface OracleUpdatedEvent {
   authorized: boolean;
 }
 
+export interface OutcomeDisputedEvent {
+  call_id: bigint;
+  staker: string;
+  bond_amount: bigint;
+}
+
+export interface ProposalFinalizedEvent {
+  call_id: bigint;
+  outcome: boolean;
+  final_price: bigint;
+}
+
 export type OutcomeManagerEvent =
   | { OutcomeSubmitted: OutcomeSubmittedEvent }
   | { PayoutWithdrawn: PayoutWithdrawnEvent }
-  | { OracleUpdated: OracleUpdatedEvent };
+  | { OracleUpdated: OracleUpdatedEvent }
+  | { OutcomeDisputed: OutcomeDisputedEvent }
+  | { ProposalFinalized: ProposalFinalizedEvent }
+  | { DisputeResolvedUphold: { call_id: bigint } }
+  | {
+      DisputeResolvedOverride: {
+        call_id: bigint;
+        outcome: boolean;
+        final_price: bigint;
+      };
+    };
 
 export interface SignatureMessage {
   call_id: bigint;
@@ -115,4 +157,11 @@ export function calculatePayout(
  */
 export function canSettleCall(currentTimestamp: bigint, call_end_ts: bigint): boolean {
   return currentTimestamp >= call_end_ts;
+}
+
+/**
+ * True if lifecycle is terminal settled state (payouts allowed once outcome is set).
+ */
+export function isLifecycleSettled(lifecycle: CallLifecycle): boolean {
+  return 'Settled' in lifecycle;
 }
