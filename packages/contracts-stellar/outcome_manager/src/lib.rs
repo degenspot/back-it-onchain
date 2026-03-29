@@ -11,6 +11,10 @@ const WITHDRAWALS: Symbol = symbol_short!("WITHDRAW");
 const CALL_REGISTRY: Symbol = symbol_short!("CALL_REG");
 const IS_PAUSED: Symbol = symbol_short!("PAUSED");
 const FEE_CONFIG: Symbol = symbol_short!("FEE_CFG");
+const ORACLE_BONDS: Symbol = symbol_short!("ORBONDS");
+const CALL_ORACLES: Symbol = symbol_short!("CLLORCL");
+const ORACLE_BOND_TOKEN: Symbol = symbol_short!("ORBTOKEN");
+const SLASHED_CALLS: Symbol = symbol_short!("SLSHCALL");
 
 const BASIS_POINTS_DENOMINATOR: i128 = 10_000;
 
@@ -46,8 +50,11 @@ pub struct FeeConfig {
 #[derive(Clone)]
 pub enum Event {
     OutcomeSubmitted(u64, bool, u128, BytesN<32>),
+    OutcomeOverturned(u64, bool, u128),
     PayoutWithdrawn(u64, Address, u128),
     OracleUpdated(BytesN<32>, bool),
+    OracleBondDeposited(BytesN<32>, u128),
+    OracleBondSlashed(u64, BytesN<32>, u128, Address),
 }
 
 #[contract]
@@ -55,8 +62,12 @@ pub struct OutcomeManagerContract;
 
 #[contractimpl]
 impl OutcomeManagerContract {
+    fn owner_address(env: &Env) -> Address {
+        env.storage().instance().get(&OWNER).unwrap()
+    }
+
     fn require_owner_auth(env: &Env) {
-        let owner: Address = env.storage().instance().get(&OWNER).unwrap();
+        let owner = Self::owner_address(env);
         owner.require_auth();
     }
 
@@ -85,6 +96,13 @@ impl OutcomeManagerContract {
         u128::try_from(value).expect("Value must be non-negative")
     }
 
+    fn get_oracle_bond_token(env: &Env) -> Address {
+        env.storage()
+            .persistent()
+            .get(&ORACLE_BOND_TOKEN)
+            .expect("Oracle bond token not set")
+    }
+
     /// Initialize the contract with owner and call registry address
     pub fn initialize(env: Env, owner: Address, call_registry: Address) {
         let storage = env.storage().instance();
@@ -107,6 +125,18 @@ impl OutcomeManagerContract {
         // Initialize empty withdrawals tracking
         let withdrawals: Map<(u64, Address), bool> = Map::new(&env);
         storage.set(&WITHDRAWALS, &withdrawals);
+
+        // Initialize oracle bond balances
+        let oracle_bonds: Map<BytesN<32>, u128> = Map::new(&env);
+        storage.set(&ORACLE_BONDS, &oracle_bonds);
+
+        // Track the oracle that settled each call
+        let call_oracles: Map<u64, BytesN<32>> = Map::new(&env);
+        storage.set(&CALL_ORACLES, &call_oracles);
+
+        // Track whether a call has already been slashed after an overturn
+        let slashed_calls: Map<u64, bool> = Map::new(&env);
+        storage.set(&SLASHED_CALLS, &slashed_calls);
 
         // Initialize pause flag in persistent storage
         env.storage().persistent().set(&IS_PAUSED, &false);
@@ -140,6 +170,15 @@ impl OutcomeManagerContract {
         Self::get_fee_config(&env)
     }
 
+    pub fn set_oracle_bond_token(env: Env, token: Address) {
+        Self::require_owner_auth(&env);
+        env.storage().persistent().set(&ORACLE_BOND_TOKEN, &token);
+    }
+
+    pub fn get_oracle_bond_token_view(env: Env) -> Option<Address> {
+        env.storage().persistent().get(&ORACLE_BOND_TOKEN)
+    }
+
     /// Pause write operations (owner only)
     pub fn pause(env: Env) {
         Self::require_owner_auth(&env);
@@ -169,6 +208,53 @@ impl OutcomeManagerContract {
             (Symbol::new(&env, "oracle_updated"),),
             Event::OracleUpdated(oracle, authorized),
         );
+    }
+
+    pub fn deposit_oracle_bond(env: Env, oracle: BytesN<32>, amount: u128) {
+        Self::assert_not_paused(&env);
+
+        if amount == 0 {
+            panic!("Bond amount must be > 0");
+        }
+
+        let storage = env.storage().instance();
+        let oracles: Map<BytesN<32>, bool> =
+            storage.get(&ORACLES).unwrap_or_else(|| Map::new(&env));
+        if !oracles.get(oracle.clone()).unwrap_or(false) {
+            panic!("Oracle not authorized");
+        }
+
+        let owner = Self::owner_address(&env);
+        owner.require_auth();
+
+        let bond_token = Self::get_oracle_bond_token(&env);
+        let token_client = token::Client::new(&env, &bond_token);
+        token_client.transfer(
+            &owner,
+            &env.current_contract_address(),
+            &Self::to_i128(amount),
+        );
+
+        let mut bonds: Map<BytesN<32>, u128> =
+            storage.get(&ORACLE_BONDS).unwrap_or_else(|| Map::new(&env));
+        let current_bond = bonds.get(oracle.clone()).unwrap_or(0);
+        let updated_bond = current_bond
+            .checked_add(amount)
+            .expect("Bond balance overflow");
+        bonds.set(oracle.clone(), updated_bond);
+        storage.set(&ORACLE_BONDS, &bonds);
+
+        env.events().publish(
+            (Symbol::new(&env, "oracle_bond_deposited"),),
+            Event::OracleBondDeposited(oracle, amount),
+        );
+    }
+
+    pub fn get_oracle_bond(env: Env, oracle: BytesN<32>) -> u128 {
+        let storage = env.storage().instance();
+        let bonds: Map<BytesN<32>, u128> =
+            storage.get(&ORACLE_BONDS).unwrap_or_else(|| Map::new(&env));
+        bonds.get(oracle).unwrap_or(0)
     }
 
     /// Check if an oracle is authorized
@@ -248,6 +334,12 @@ impl OutcomeManagerContract {
             panic!("Oracle not authorized");
         }
 
+        let bonds: Map<BytesN<32>, u128> =
+            storage.get(&ORACLE_BONDS).unwrap_or_else(|| Map::new(&env));
+        if bonds.get(oracle_pubkey.clone()).unwrap_or(0) == 0 {
+            panic!("Oracle bond required");
+        }
+
         // Mark call as settled
         let mut call_data = calls.get(call_id).unwrap();
         call_data.settled = true;
@@ -256,6 +348,11 @@ impl OutcomeManagerContract {
         calls.set(call_id, call_data);
         storage.set(&CALLS, &calls);
 
+        let mut call_oracles: Map<u64, BytesN<32>> =
+            storage.get(&CALL_ORACLES).unwrap_or_else(|| Map::new(&env));
+        call_oracles.set(call_id, oracle_pubkey.clone());
+        storage.set(&CALL_ORACLES, &call_oracles);
+
         // Emit event
         env.events().publish(
             (Symbol::new(&env, "outcome_submitted"),),
@@ -263,6 +360,92 @@ impl OutcomeManagerContract {
         );
 
         true
+    }
+
+    pub fn overturn_outcome_by_majority(
+        env: Env,
+        call_id: u64,
+        majority_outcome: bool,
+        majority_final_price: u128,
+    ) -> bool {
+        Self::require_owner_auth(&env);
+
+        let storage = env.storage().instance();
+        let mut calls: Map<u64, CallData> = storage.get(&CALLS).unwrap_or_else(|| Map::new(&env));
+        let mut call_data = calls
+            .get(call_id)
+            .unwrap_or_else(|| panic!("Call not found"));
+
+        if !call_data.settled {
+            panic!("Call not settled");
+        }
+
+        let mut was_overturned = false;
+        let existing_outcome = call_data
+            .outcome
+            .unwrap_or_else(|| panic!("Call outcome missing"));
+
+        if existing_outcome != majority_outcome {
+            let mut slashed_calls: Map<u64, bool> = storage
+                .get(&SLASHED_CALLS)
+                .unwrap_or_else(|| Map::new(&env));
+
+            if slashed_calls.get(call_id).unwrap_or(false) {
+                panic!("Call already slashed");
+            }
+
+            let call_oracles: Map<u64, BytesN<32>> =
+                storage.get(&CALL_ORACLES).unwrap_or_else(|| Map::new(&env));
+            let settling_oracle = call_oracles
+                .get(call_id)
+                .unwrap_or_else(|| panic!("Settling oracle not found"));
+
+            let mut bonds: Map<BytesN<32>, u128> =
+                storage.get(&ORACLE_BONDS).unwrap_or_else(|| Map::new(&env));
+            let slash_amount = bonds.get(settling_oracle.clone()).unwrap_or(0);
+
+            if slash_amount > 0 {
+                bonds.set(settling_oracle.clone(), 0);
+                storage.set(&ORACLE_BONDS, &bonds);
+
+                let fee_config = Self::get_fee_config(&env);
+                let bond_token = Self::get_oracle_bond_token(&env);
+                let token_client = token::Client::new(&env, &bond_token);
+                token_client.transfer(
+                    &env.current_contract_address(),
+                    &fee_config.treasury,
+                    &Self::to_i128(slash_amount),
+                );
+
+                env.events().publish(
+                    (Symbol::new(&env, "oracle_bond_slashed"),),
+                    Event::OracleBondSlashed(
+                        call_id,
+                        settling_oracle,
+                        slash_amount,
+                        fee_config.treasury,
+                    ),
+                );
+            }
+
+            slashed_calls.set(call_id, true);
+            storage.set(&SLASHED_CALLS, &slashed_calls);
+            was_overturned = true;
+        }
+
+        call_data.outcome = Some(majority_outcome);
+        call_data.final_price = Some(majority_final_price);
+        calls.set(call_id, call_data);
+        storage.set(&CALLS, &calls);
+
+        if was_overturned {
+            env.events().publish(
+                (Symbol::new(&env, "outcome_overturned"),),
+                Event::OutcomeOverturned(call_id, majority_outcome, majority_final_price),
+            );
+        }
+
+        was_overturned
     }
 
     /// Register a call (called by CallRegistry or stake contract)
