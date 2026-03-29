@@ -246,5 +246,63 @@ impl CallRegistry {
             .unwrap_or(0)
     }
 }
+/// Finalize a call and reward the caller with a gas fee
+    /// Deducts 0.5% from the losers' pool as a gas fee
+    /// Transfers the fee to the address that calls this function
+    pub fn finalize_call(
+        env: Env,
+        call_id: u64,
+        outcome: bool,
+        final_price: i128,
+        caller: Address,
+    ) {
+        caller.require_auth();
 
+        let key = DataKey::Call(call_id);
+        let mut call: Call = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .expect("Call does not exist");
+
+        if call.settled {
+            panic!("Call already settled");
+        }
+        if env.ledger().timestamp() < call.end_ts {
+            panic!("Call has not ended yet");
+        }
+
+        // Determine losers pool
+        let losers_pool = if outcome {
+            call.total_stake_no
+        } else {
+            call.total_stake_yes
+        };
+
+        // Deduct 0.5% gas fee from losers pool
+        let gas_fee = losers_pool * 5 / 1000;
+
+        // Transfer gas fee to caller
+        if gas_fee > 0 {
+            let token_client = token::Client::new(&env, &call.stake_token);
+            token_client.transfer(
+                &env.current_contract_address(),
+                &caller,
+                &gas_fee,
+            );
+        }
+
+        // Mark call as settled
+        call.settled = true;
+        call.outcome = outcome;
+        call.final_price = final_price;
+        env.storage().persistent().set(&key, &call);
+
+        // Emit CallFinalized event
+        env.events().publish(
+            (Symbol::new(&env, "CallFinalized"), call_id, caller),
+            (outcome, final_price, gas_fee),
+        );
+    }
 mod test;
+
