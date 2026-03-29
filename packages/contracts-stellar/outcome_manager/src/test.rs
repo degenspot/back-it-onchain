@@ -1,8 +1,6 @@
 #![cfg(test)]
 
-use crate::{
-    CallData, CallLifecycle, OutcomeManagerContract, OutcomeManagerContractClient, CALLS,
-};
+use crate::{CallData, CallLifecycle, OutcomeManagerContract, OutcomeManagerContractClient, CALLS};
 use soroban_sdk::{
     testutils::{Address as _, Ledger, MockAuth, MockAuthInvoke},
     token, Address, BytesN, Env, IntoVal,
@@ -407,13 +405,7 @@ fn test_dispute_outcome_and_uphold_slash_bond() {
     client.set_fee_config(&0u32, &treasury);
 
     let call_id = 7u64;
-    client.register_call(
-        &call_id,
-        &stake_token,
-        &1000u128,
-        &500u128,
-        &1_000_000u64,
-    );
+    client.register_call(&call_id, &stake_token, &1000u128, &500u128, &1_000_000u64);
 
     let now = 10_000u64;
     let window_end = now + 86_400;
@@ -436,10 +428,7 @@ fn test_dispute_outcome_and_uphold_slash_bond() {
     client.dispute_outcome(&call_id, &disputer, &100i128);
 
     let call = client.get_call(&call_id).unwrap();
-    assert!(matches!(
-        call.lifecycle,
-        CallLifecycle::Disputed { .. }
-    ));
+    assert!(matches!(call.lifecycle, CallLifecycle::Disputed { .. }));
     assert_eq!(stake_token_client.balance(&contract_id), 100i128);
     assert_eq!(stake_token_client.balance(&disputer), 100i128);
 
@@ -475,13 +464,7 @@ fn test_dispute_outcome_and_override_refunds_bond() {
     client.set_fee_config(&0u32, &treasury);
 
     let call_id = 8u64;
-    client.register_call(
-        &call_id,
-        &stake_token,
-        &100u128,
-        &100u128,
-        &2_000_000u64,
-    );
+    client.register_call(&call_id, &stake_token, &100u128, &100u128, &2_000_000u64);
 
     let now = 20_000u64;
     env.ledger().set_timestamp(now);

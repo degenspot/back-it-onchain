@@ -379,11 +379,7 @@ impl OutcomeManagerContract {
         }
 
         let token_client = token::Client::new(&env, &call_data.token);
-        token_client.transfer(
-            &staker,
-            &env.current_contract_address(),
-            &bond_amount,
-        );
+        token_client.transfer(&staker, &env.current_contract_address(), &bond_amount);
 
         call_data.lifecycle = CallLifecycle::Disputed {
             proposed_outcome,
@@ -424,11 +420,7 @@ impl OutcomeManagerContract {
         let token_client = token::Client::new(&env, &call_data.token);
 
         if bond > 0 {
-            token_client.transfer(
-                &env.current_contract_address(),
-                &fee_config.treasury,
-                &bond,
-            );
+            token_client.transfer(&env.current_contract_address(), &fee_config.treasury, &bond);
         }
 
         call_data.lifecycle = CallLifecycle::Settled;
@@ -459,11 +451,7 @@ impl OutcomeManagerContract {
         let mut call_data = calls.get(call_id).expect("Call not found");
 
         let (disputer, bond) = match &call_data.lifecycle {
-            CallLifecycle::Disputed {
-                disputer,
-                bond,
-                ..
-            } => (disputer.clone(), *bond),
+            CallLifecycle::Disputed { disputer, bond, .. } => (disputer.clone(), *bond),
             _ => panic!("Call not disputed"),
         };
 
