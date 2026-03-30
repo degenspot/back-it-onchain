@@ -84,7 +84,7 @@ export class BadgesService {
        FROM "call" WHERE creator_wallet = $1 AND is_hidden = false`,
       [wallet],
     );
-    return parseFloat(row.total);
+    return parseFloat(row.total ?? '0');
   }
 
   private async getFollowerCount(wallet: string): Promise<number> {
