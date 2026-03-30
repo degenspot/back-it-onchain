@@ -47,8 +47,10 @@ describe('Database Schema Validation (Integration)', () => {
     if (!report.success) {
       const details = report.errors.map((e) => e.details ?? '').join(' ');
       const looksLikeDbUnavailable =
+        details.includes('AggregateError') ||
         details.includes('does not exist') ||
         details.includes('ECONNREFUSED') ||
+        details.includes('connect ECONNREFUSED') ||
         details.includes('Connection terminated') ||
         details.includes('getaddrinfo ENOTFOUND');
 
