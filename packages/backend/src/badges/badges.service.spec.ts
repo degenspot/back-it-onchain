@@ -310,6 +310,7 @@ describe('BadgesService', () => {
 
   describe('Threshold queries', () => {
     const wallet = '0x123';
+    const normalizeSql = (s: string) => s.replace(/\s+/g, ' ').trim();
 
     describe('getCallCount', () => {
       it('should return the count of non-hidden calls', async () => {
@@ -317,11 +318,15 @@ describe('BadgesService', () => {
 
         const result = await (service as any).getCallCount(wallet);
 
-        expect(mockDataSource.query).toHaveBeenCalledWith(
-          `SELECT COUNT(*)::int AS cnt FROM "call"
+        const [actualQuery, actualParams] = (mockDataSource.query as any)
+          .mock.calls[0];
+        expect(normalizeSql(actualQuery)).toBe(
+          normalizeSql(
+            `SELECT COUNT(*)::int AS cnt FROM "call"
            WHERE creator_wallet = $1 AND is_hidden = false`,
-          [wallet],
+          ),
         );
+        expect(actualParams).toEqual([wallet]);
         expect(result).toBe(5);
       });
     });
@@ -332,11 +337,15 @@ describe('BadgesService', () => {
 
         const result = await (service as any).getWinsCount(wallet);
 
-        expect(mockDataSource.query).toHaveBeenCalledWith(
-          `SELECT COUNT(*)::int AS cnt FROM "call"
+        const [actualQuery, actualParams] = (mockDataSource.query as any)
+          .mock.calls[0];
+        expect(normalizeSql(actualQuery)).toBe(
+          normalizeSql(
+            `SELECT COUNT(*)::int AS cnt FROM "call"
            WHERE creator_wallet = $1 AND status = 'RESOLVED' AND outcome = true`,
-          [wallet],
+          ),
         );
+        expect(actualParams).toEqual([wallet]);
         expect(result).toBe(3);
       });
     });
@@ -347,11 +356,15 @@ describe('BadgesService', () => {
 
         const result = await (service as any).getTotalStake(wallet);
 
-        expect(mockDataSource.query).toHaveBeenCalledWith(
-          `SELECT COALESCE(SUM(total_stake_yes + total_stake_no), 0) AS total
+        const [actualQuery, actualParams] = (mockDataSource.query as any)
+          .mock.calls[0];
+        expect(normalizeSql(actualQuery)).toBe(
+          normalizeSql(
+            `SELECT COALESCE(SUM(total_stake_yes + total_stake_no), 0) AS total
            FROM "call" WHERE creator_wallet = $1 AND is_hidden = false`,
-          [wallet],
+          ),
         );
+        expect(actualParams).toEqual([wallet]);
         expect(result).toBe(1234.56);
       });
 
@@ -370,11 +383,15 @@ describe('BadgesService', () => {
 
         const result = await (service as any).getFollowerCount(wallet);
 
-        expect(mockDataSource.query).toHaveBeenCalledWith(
-          `SELECT COUNT(*)::int AS cnt FROM user_follows
+        const [actualQuery, actualParams] = (mockDataSource.query as any)
+          .mock.calls[0];
+        expect(normalizeSql(actualQuery)).toBe(
+          normalizeSql(
+            `SELECT COUNT(*)::int AS cnt FROM user_follows
            WHERE following_wallet = $1`,
-          [wallet],
+          ),
         );
+        expect(actualParams).toEqual([wallet]);
         expect(result).toBe(15);
       });
     });

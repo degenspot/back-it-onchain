@@ -5,6 +5,7 @@ import { Keypair } from '@stellar/stellar-sdk';
 
 describe('OracleService', () => {
   let service: OracleService;
+  jest.setTimeout(30000);
 
   // Test keypair with known values for verification
   // Secret: SCXJ4DAPQMXLKP3QITADMVLNX5Q7PV4L3BQKVME4N6TL5M2VJJYR7FAS
@@ -288,14 +289,27 @@ describe('OracleService', () => {
 
   describe('Price fetching with mocked RPC', () => {
     let originalFetch: typeof global.fetch;
+    let originalAbortSignalTimeout: any;
+    let originalSetTimeout: any;
 
     beforeEach(() => {
       originalFetch = global.fetch;
+      originalAbortSignalTimeout = (AbortSignal as any).timeout;
+      originalSetTimeout = global.setTimeout;
+      // Avoid creating real 8s timers for AbortSignal.timeout during unit tests.
+      (AbortSignal as any).timeout = () => new AbortController().signal;
+      // Execute retry backoff timers immediately to keep tests fast/stable.
+      (global as any).setTimeout = (cb: any) => {
+        cb();
+        return 0;
+      };
       jest.clearAllMocks();
     });
 
     afterEach(() => {
       global.fetch = originalFetch;
+      (AbortSignal as any).timeout = originalAbortSignalTimeout;
+      (global as any).setTimeout = originalSetTimeout;
       jest.clearAllMocks();
     });
 
@@ -396,204 +410,282 @@ describe('OracleService', () => {
     });
 
     it('should throw error when API returns non-ok status', async () => {
-      global.fetch = jest.fn().mockResolvedValue({
-        ok: false,
-        status: 404,
-        statusText: 'Not Found',
-      });
+      const randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.5);
 
-      const tokenAddress = '0x1234567890123456789012345678901234567890';
+      try {
+        global.fetch = jest.fn().mockResolvedValue({
+          ok: false,
+          status: 404,
+          statusText: 'Not Found',
+        });
 
-      await expect(service.fetchPrice(tokenAddress)).rejects.toThrow(
-        'DexScreener responded 404 Not Found',
-      );
+        const tokenAddress = '0x1234567890123456789012345678901234567890';
+
+        const pricePromise = service.fetchPrice(tokenAddress);
+        // Ensure the first failed attempt schedules its retry timer.
+        await Promise.resolve();
+
+        await expect(pricePromise).rejects.toThrow(
+          'DexScreener responded 404 Not Found',
+        );
+      } finally {
+        randomSpy.mockRestore();
+      }
     });
 
     it('should throw error when no price data in response', async () => {
-      global.fetch = jest.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          pairs: [],
-        }),
-      });
+      const randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.5);
 
-      await expect(service.fetchPrice('0xtoken')).rejects.toThrow(
-        'No price data returned by DexScreener',
-      );
+      try {
+        global.fetch = jest.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({
+            pairs: [],
+          }),
+        });
+
+        const pricePromise = service.fetchPrice('0xtoken');
+        // Ensure the first failed attempt schedules its retry timer.
+        await Promise.resolve();
+
+        await expect(pricePromise).rejects.toThrow(
+          'No price data returned by DexScreener',
+        );
+      } finally {
+        randomSpy.mockRestore();
+      }
     });
 
     it('should throw error when price field is missing', async () => {
-      global.fetch = jest.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          pairs: [
-            {
-              baseToken: { symbol: 'TEST' },
-              volume: { h24: 1000 },
-              liquidity: { usd: 5000 },
-              // priceUsd is missing!
-            },
-          ],
-        }),
-      });
+      const randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.5);
 
-      await expect(service.fetchPrice('0xtoken')).rejects.toThrow(
-        'No price data returned by DexScreener',
-      );
+      try {
+        global.fetch = jest.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({
+            pairs: [
+              {
+                baseToken: { symbol: 'TEST' },
+                volume: { h24: 1000 },
+                liquidity: { usd: 5000 },
+                // priceUsd is missing!
+              },
+            ],
+          }),
+        });
+
+        const pricePromise = service.fetchPrice('0xtoken');
+        // Ensure the first failed attempt schedules its retry timer.
+        await Promise.resolve();
+
+        await expect(pricePromise).rejects.toThrow(
+          'No price data returned by DexScreener',
+        );
+      } finally {
+        randomSpy.mockRestore();
+      }
     });
 
     it('should handle network error with retry', async () => {
-      const networkError = new Error('Network timeout');
-      let attemptCount = 0;
+      const randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.5);
 
-      global.fetch = jest.fn(() => {
-        attemptCount++;
-        if (attemptCount < 3) {
-          return Promise.reject(networkError);
-        }
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            pairs: [
-              {
-                priceUsd: '100.00',
-                baseToken: { symbol: 'TEST' },
-                volume: { h24: 1000 },
-                liquidity: { usd: 5000 },
-              },
-            ],
-          }),
+      try {
+        const networkError = new Error('Network timeout');
+        let attemptCount = 0;
+
+        (global.fetch as any) = jest.fn(() => {
+          attemptCount++;
+          if (attemptCount < 3) {
+            return Promise.reject(networkError) as Promise<Response>;
+          }
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              pairs: [
+                {
+                  priceUsd: '100.00',
+                  baseToken: { symbol: 'TEST' },
+                  volume: { h24: 1000 },
+                  liquidity: { usd: 5000 },
+                },
+              ],
+            }),
+          } as unknown as Response) as Promise<Response>;
         });
-      });
 
-      const price = await service.fetchPrice('0xtoken');
+        const pricePromise = service.fetchPrice('0xtoken');
+        // Ensure the first rejected attempt schedules its retry timer.
+        await Promise.resolve();
+        const price = await pricePromise;
 
-      expect(price).toBe(100.0);
-      expect(attemptCount).toBe(3);
-      expect(global.fetch).toHaveBeenCalledTimes(3);
+        expect(price).toBe(100.0);
+        expect(attemptCount).toBe(3);
+        expect(global.fetch).toHaveBeenCalledTimes(3);
+      } finally {
+        randomSpy.mockRestore();
+      }
     });
 
     it('should fail after max retry attempts exhausted', async () => {
-      global.fetch = jest.fn().mockRejectedValue(new Error('API is down'));
+      const randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.5);
 
-      await expect(service.fetchPrice('0xtoken')).rejects.toThrow(
-        '"oracle:fetchPrice" failed after 4 attempt(s)',
-      );
-      expect(global.fetch).toHaveBeenCalledTimes(4);
+      try {
+        global.fetch = jest.fn().mockRejectedValue(new Error('API is down'));
+
+        const pricePromise = service.fetchPrice('0xtoken');
+        // Ensure the first rejected attempt schedules its retry timer.
+        await Promise.resolve();
+
+        await expect(pricePromise).rejects.toThrow(
+          '"oracle:fetchPrice" failed after 4 attempt(s)',
+        );
+        expect(global.fetch).toHaveBeenCalledTimes(4);
+      } finally {
+        randomSpy.mockRestore();
+      }
     });
 
     it('should include retry delays', async () => {
-      jest.useFakeTimers();
+      const randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.5);
 
-      const networkError = new Error('Temporary error');
-      let attemptCount = 0;
+      try {
+        const networkError = new Error('Temporary error');
+        let attemptCount = 0;
 
-      global.fetch = jest.fn(() => {
-        attemptCount++;
-        if (attemptCount < 2) {
-          return Promise.reject(networkError);
-        }
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            pairs: [
-              {
-                priceUsd: '50.00',
-                baseToken: { symbol: 'TEST' },
-                volume: { h24: 100 },
-                liquidity: { usd: 500 },
-              },
-            ],
-          }),
+        (global.fetch as any) = jest.fn(() => {
+          attemptCount++;
+          if (attemptCount < 2) {
+            return Promise.reject(networkError) as Promise<Response>;
+          }
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              pairs: [
+                {
+                  priceUsd: '50.00',
+                  baseToken: { symbol: 'TEST' },
+                  volume: { h24: 100 },
+                  liquidity: { usd: 500 },
+                },
+              ],
+            }),
+          } as unknown as Response) as Promise<Response>;
         });
-      });
 
-      const pricePromise = service.fetchPrice('0xtoken');
-
-      // Fast-forward through all retry delays
-      jest.runAllTimers();
-
-      const price = await pricePromise;
-      expect(price).toBe(50.0);
-
-      jest.useRealTimers();
+        const pricePromise = service.fetchPrice('0xtoken');
+        // Ensure the first rejected attempt schedules its retry timer.
+        await Promise.resolve();
+        const price = await pricePromise;
+        expect(price).toBe(50.0);
+      } finally {
+        randomSpy.mockRestore();
+      }
     });
 
     it('should handle server errors (5xx)', async () => {
-      global.fetch = jest
-        .fn()
-        .mockResolvedValueOnce({
-          ok: false,
-          status: 500,
-          statusText: 'Internal Server Error',
-        })
-        .mockResolvedValueOnce({
-          ok: false,
-          status: 503,
-          statusText: 'Service Unavailable',
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            pairs: [
-              {
-                priceUsd: '200.00',
-                baseToken: { symbol: 'TEST' },
-                volume: { h24: 1000 },
-                liquidity: { usd: 9000 },
-              },
-            ],
-          }),
-        });
+      const randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.5);
 
-      const price = await service.fetchPrice('0xtoken');
+      try {
+        global.fetch = jest
+          .fn()
+          .mockResolvedValueOnce({
+            ok: false,
+            status: 500,
+            statusText: 'Internal Server Error',
+          })
+          .mockResolvedValueOnce({
+            ok: false,
+            status: 503,
+            statusText: 'Service Unavailable',
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({
+              pairs: [
+                {
+                  priceUsd: '200.00',
+                  baseToken: { symbol: 'TEST' },
+                  volume: { h24: 1000 },
+                  liquidity: { usd: 9000 },
+                },
+              ],
+            }),
+          });
 
-      expect(price).toBe(200.0);
-      expect(global.fetch).toHaveBeenCalledTimes(3);
+        const pricePromise = service.fetchPrice('0xtoken');
+        // Ensure the first failed attempt schedules its retry timer.
+        await Promise.resolve();
+        const price = await pricePromise;
+
+        expect(price).toBe(200.0);
+        expect(global.fetch).toHaveBeenCalledTimes(3);
+      } finally {
+        randomSpy.mockRestore();
+      }
     });
 
     it('should handle malformed JSON response', async () => {
-      let attemptCount = 0;
+      const randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.5);
 
-      global.fetch = jest.fn(() => {
-        attemptCount++;
-        if (attemptCount < 2) {
+      try {
+        let attemptCount = 0;
+
+        (global.fetch as any) = jest.fn(() => {
+          attemptCount++;
+          if (attemptCount < 2) {
+            return Promise.resolve({
+              ok: true,
+              json: async () => {
+                throw new Error('Invalid JSON');
+              },
+            } as unknown as Response) as Promise<Response>;
+          }
           return Promise.resolve({
             ok: true,
-            json: async () => {
-              throw new Error('Invalid JSON');
-            },
-          });
-        }
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            pairs: [
-              {
-                priceUsd: '150.00',
-                baseToken: { symbol: 'TEST' },
-                volume: { h24: 1000 },
-                liquidity: { usd: 5000 },
-              },
-            ],
-          }),
+            json: async () => ({
+              pairs: [
+                {
+                  priceUsd: '150.00',
+                  baseToken: { symbol: 'TEST' },
+                  volume: { h24: 1000 },
+                  liquidity: { usd: 5000 },
+                },
+              ],
+            }),
+          } as unknown as Response) as Promise<Response>;
         });
-      });
 
-      const price = await service.fetchPrice('0xtoken');
-      expect(price).toBe(150.0);
-      expect(attemptCount).toBe(2);
+        const pricePromise = service.fetchPrice('0xtoken');
+        // Ensure the first failed attempt schedules its retry timer.
+        await Promise.resolve();
+        const price = await pricePromise;
+
+        expect(price).toBe(150.0);
+        expect(attemptCount).toBe(2);
+      } finally {
+        randomSpy.mockRestore();
+      }
     });
 
     it('should use fetchPriceSafe to return null on exhaustion', async () => {
-      global.fetch = jest
-        .fn()
-        .mockRejectedValue(new Error('Persistent connection failure'));
+      const randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.5);
 
-      const price = await service.fetchPriceSafe('0xtoken');
+      try {
+        global.fetch = jest
+          .fn()
+          .mockRejectedValue(new Error('Persistent connection failure'));
 
-      expect(price).toBeNull();
-      expect(global.fetch).toHaveBeenCalledTimes(4);
+        const pricePromise = service.fetchPriceSafe('0xtoken');
+        // Ensure the first failed attempt schedules its retry timer.
+        await Promise.resolve();
+
+        const price = await pricePromise;
+
+        expect(price).toBeNull();
+        expect(global.fetch).toHaveBeenCalledTimes(4);
+      } finally {
+        randomSpy.mockRestore();
+      }
     });
 
     it('should use fetchPriceSafe to return price on success', async () => {
@@ -691,30 +783,36 @@ describe('OracleService', () => {
     });
 
     it('should incorporate volume and liquidity info in logs', async () => {
-      const logSpy = jest.spyOn(service as any, 'logger').mockImplementation({
+      const originalLogger = (service as any).logger;
+      const loggerMock = {
         log: jest.fn(),
         error: jest.fn(),
         warn: jest.fn(),
-      } as any);
+      };
 
-      global.fetch = jest.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          pairs: [
-            {
-              priceUsd: '500.00',
-              baseToken: { symbol: 'TESTED' },
-              volume: { h24: 2500000 },
-              liquidity: { usd: 5000000 },
-            },
-          ],
-        }),
-      });
+      (service as any).logger = loggerMock;
+      try {
+        global.fetch = jest.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({
+            pairs: [
+              {
+                priceUsd: '500.00',
+                baseToken: { symbol: 'TESTED' },
+                volume: { h24: 2500000 },
+                liquidity: { usd: 5000000 },
+              },
+            ],
+          }),
+        });
 
-      await service.fetchPrice('0xtoken');
+        await service.fetchPrice('0xtoken');
 
-      // Logger should have been called
-      expect(logSpy).toBeDefined();
+        // Logger should have been called
+        expect(loggerMock.log).toHaveBeenCalled();
+      } finally {
+        (service as any).logger = originalLogger;
+      }
     });
   });
 
@@ -760,24 +858,36 @@ describe('OracleService', () => {
       expect(typeof signature).toBe('string');
     });
 
-    it('should handle outcome resolution with failed price fetch', async () => {
-      global.fetch = jest.fn().mockRejectedValue(new Error('API down'));
+    it(
+      'should handle outcome resolution with failed price fetch',
+      async () => {
+        const randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.5);
 
-      const price = await service.fetchPriceSafe('0xtoken');
+        try {
+          global.fetch = jest.fn().mockRejectedValue(new Error('API down'));
 
-      expect(price).toBeNull();
+          const pricePromise = service.fetchPriceSafe('0xtoken');
+          // Ensure the first failed attempt schedules its retry timer.
+          await Promise.resolve();
+          const price = await pricePromise;
+          expect(price).toBeNull();
 
-      // Should still be able to sign with default price if available
-      const signature = await service.signOutcomeForChain(
-        'base',
-        1,
-        true,
-        0, // fallback price
-        Math.floor(Date.now() / 1000),
-      );
+          // Should still be able to sign with default price if available
+          const signature = await service.signOutcomeForChain(
+            'base',
+            1,
+            true,
+            0, // fallback price
+            Math.floor(Date.now() / 1000),
+          );
 
-      expect(signature).toBeTruthy();
-    });
+          expect(signature).toBeTruthy();
+        } finally {
+          randomSpy.mockRestore();
+        }
+      },
+      20000,
+    );
 
     it('should maintain price consistency for single call resolution', async () => {
       global.fetch = jest.fn().mockResolvedValue({

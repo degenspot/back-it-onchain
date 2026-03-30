@@ -250,7 +250,7 @@ export class SchemaValidator {
           // Check if the join column exists
           const joinColumn = entity.columns.find(
             (col) =>
-              col.relationMetadata?.relationName === relation.propertyName,
+              col.relationMetadata?.propertyName === relation.propertyName,
           );
 
           if (!joinColumn) {
