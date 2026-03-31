@@ -1,7 +1,8 @@
 #![cfg(test)]
 
 use crate::{
-    CallData, OracleVote, OutcomeManagerContract, OutcomeManagerContractClient, CALLS, VOTES,
+    CallData, OracleVote, OutcomeManagerContract, OutcomeManagerContractClient, CALLS,
+    CALL_ORACLES, VOTES,
 };
 use soroban_sdk::{
     testutils::{Address as _, MockAuth, MockAuthInvoke},
@@ -515,4 +516,91 @@ fn test_set_fee_config_requires_owner_auth() {
         },
     }]);
     client.set_fee_config(&250u32, &treasury);
+}
+
+#[test]
+fn test_deposit_oracle_bond() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, OutcomeManagerContract);
+    let client = OutcomeManagerContractClient::new(&env, &contract_id);
+
+    let owner = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let oracle = BytesN::from_array(&env, &[9; 32]);
+    let token_admin = Address::generate(&env);
+    let bond_token_contract = env.register_stellar_asset_contract_v2(token_admin.clone());
+    let bond_token = bond_token_contract.address();
+    let bond_token_admin_client = token::StellarAssetClient::new(&env, &bond_token);
+    let bond_token_client = token::Client::new(&env, &bond_token);
+
+    client.initialize(&owner, &registry);
+    client.set_oracle(&oracle, &true);
+    client.set_oracle_bond_token(&bond_token);
+
+    bond_token_admin_client.mint(&owner, &1_000i128);
+
+    client.deposit_oracle_bond(&oracle, &300u128);
+
+    assert_eq!(client.get_oracle_bond(&oracle), 300u128);
+    assert_eq!(bond_token_client.balance(&contract_id), 300i128);
+    assert_eq!(bond_token_client.balance(&owner), 700i128);
+}
+
+#[test]
+fn test_overturn_outcome_slashes_oracle_bond_to_treasury() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, OutcomeManagerContract);
+    let client = OutcomeManagerContractClient::new(&env, &contract_id);
+
+    let owner = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let oracle = BytesN::from_array(&env, &[10; 32]);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+    let stake_token_client = token::Client::new(&env, &stake_token);
+
+    client.initialize(&owner, &registry);
+    client.set_fee_config(&0u32, &treasury);
+    client.set_oracle(&oracle, &true);
+    client.set_oracle_bond_token(&stake_token);
+
+    stake_token_admin_client.mint(&owner, &2_000i128);
+    client.deposit_oracle_bond(&oracle, &500u128);
+
+    let call_id = 42u64;
+    client.register_call(&call_id, &stake_token, &1_000u128, &500u128, &1_000_000u64);
+
+    env.as_contract(&contract_id, || {
+        let mut calls: soroban_sdk::Map<u64, CallData> =
+            env.storage().instance().get(&CALLS).unwrap();
+        let mut call_data = calls.get(call_id).unwrap();
+        call_data.settled = true;
+        call_data.outcome = Some(true);
+        call_data.final_price = Some(110u128);
+        calls.set(call_id, call_data);
+        env.storage().instance().set(&CALLS, &calls);
+
+        let mut call_oracles: soroban_sdk::Map<u64, BytesN<32>> =
+            env.storage().instance().get(&CALL_ORACLES).unwrap();
+        call_oracles.set(call_id, oracle.clone());
+        env.storage().instance().set(&CALL_ORACLES, &call_oracles);
+    });
+
+    let overturned = client.overturn_outcome_by_majority(&call_id, &false, &90u128);
+    assert!(overturned);
+
+    let updated_call = client.get_call(&call_id).unwrap();
+    assert_eq!(updated_call.outcome, Some(false));
+    assert_eq!(updated_call.final_price, Some(90u128));
+
+    assert_eq!(client.get_oracle_bond(&oracle), 0u128);
+    assert_eq!(stake_token_client.balance(&treasury), 500i128);
+    assert_eq!(stake_token_client.balance(&contract_id), 0i128);
 }

@@ -32,10 +32,31 @@ export interface OracleUpdatedEvent {
   authorized: boolean;
 }
 
+export interface OracleBondDepositedEvent {
+  oracle: string;
+  amount: bigint;
+}
+
+export interface OracleBondSlashedEvent {
+  call_id: bigint;
+  oracle: string;
+  amount: bigint;
+  treasury: string;
+}
+
+export interface OutcomeOverturnedEvent {
+  call_id: bigint;
+  outcome: boolean;
+  final_price: bigint;
+}
+
 export type OutcomeManagerEvent =
   | { OutcomeSubmitted: OutcomeSubmittedEvent }
   | { PayoutWithdrawn: PayoutWithdrawnEvent }
-  | { OracleUpdated: OracleUpdatedEvent };
+  | { OracleUpdated: OracleUpdatedEvent }
+  | { OracleBondDeposited: OracleBondDepositedEvent }
+  | { OracleBondSlashed: OracleBondSlashedEvent }
+  | { OutcomeOverturned: OutcomeOverturnedEvent };
 
 export interface SignatureMessage {
   call_id: bigint;
