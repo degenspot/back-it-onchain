@@ -5,31 +5,8 @@ import { AppLayout } from "@/components/AppLayout";
 import { useGlobalState } from "@/components/GlobalState";
 import { CallCard } from "@/components/CallCard";
 import { CallCardSkeleton } from "@/components/CallCardSkeleton";
+import { type Call, type User } from "@/lib/types";
 
-interface Call {
-  id: string;
-  title: string;
-  thesis: string;
-  asset: string;
-  target: string;
-  deadline: string;
-  stake: string;
-  creator: { wallet: string; handle: string } | string;
-  status: string;
-  createdAt: string;
-  backers: number;
-  comments: number;
-  volume: string;
-  totalStakeYes: number;
-  totalStakeNo: number;
-  stakeToken: string;
-  endTs: number;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  conditionJson?: any;
-  creatorWallet?: string;
-  pairId?: string;
-  callOnchainId?: string;
-}
 
 const API_BASE_URL = (
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:3001"
@@ -51,10 +28,10 @@ function mapCall(c: any): Call {
     target: c.conditionJson?.target || "TBD",
     deadline: new Date(c.endTs).toLocaleDateString(),
     stake: `${c.totalStakeYes || 0} ${c.stakeToken || "USDC"}`,
-    creator: c.creator || {
+    creator: (typeof c.creator === 'string' ? { wallet: c.creator } : (c.creator || {
       wallet: c.creatorWallet,
       handle: c.creatorWallet?.slice(0, 6),
-    },
+    })) as User,
     status: c.status || "active",
     createdAt: c.createdAt,
     backers: 0,

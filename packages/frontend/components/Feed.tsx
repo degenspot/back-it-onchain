@@ -5,27 +5,10 @@ import { CallCard } from './CallCard';
 import { CallCardSkeleton } from './CallCardSkeleton';
 import StakingModal from './StakingModal';
 import RecommendedUsers from './RecommendedUsers';
+import { type Call } from '@/lib/types';
 
 type ChainFilter = 'all' | 'base' | 'stellar';
 
-interface Call {
-    id: number;
-    tokenAddress: string;
-    stakeAmount: string;
-    targetPrice: string;
-    endTs: string;
-    creatorWallet: string;
-    chain: 'base' | 'stellar';
-    status?: string;
-    stakeToken?: string;
-    totalStakeYes?: number;
-    totalStakeNo?: number;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    conditionJson?: any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    creator?: any;
-    createdAt?: string;
-}
 
 export function Feed() {
     const [calls, setCalls] = useState<Call[]>([]);
@@ -105,8 +88,9 @@ export function Feed() {
     }, [chainFilter]);
 
     useEffect(() => {
-        function handler(e: any) {
-            setSelectedCall(e.detail);
+        function handler(e: Event) {
+            const customEvent = e as CustomEvent<Call>;
+            setSelectedCall(customEvent.detail);
             setShowModal(true);
         }
         window.addEventListener('quick-stake', handler as EventListener);

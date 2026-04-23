@@ -53,9 +53,9 @@ export default function CallDetailPage() {
     }
 
     // Parse stake amount for calculations
-    const stakeAmount = parseFloat(call.stake.split(" ")[0]) || 0;
+    const stakeAmount = parseFloat(String(call.stake || "").split(" ")[0]) || 0;
     const startPrice = 0.12; // Mock start price
-    const targetPrice = parseFloat(call.target.replace(/[^0-9.]/g, "")) || startPrice * 1.25;
+    const targetPrice = parseFloat(String(call.target || "").replace(/[^0-9.]/g, "")) || startPrice * 1.25;
 
     const RightSidebar = (
         <div className="space-y-6">
@@ -68,19 +68,19 @@ export default function CallDetailPage() {
                 <div className="space-y-4">
                     <div className="flex justify-between items-center text-sm">
                         <span className="text-muted-foreground">Total Volume</span>
-                        <span className="font-bold text-foreground">{call.volume}</span>
+                        <span className="font-bold text-foreground">{String(call.volume || "$0")}</span>
                     </div>
                     <div className="flex justify-between items-center text-sm">
                         <span className="text-muted-foreground">Participants</span>
-                        <span className="font-bold text-foreground">{call.backers}</span>
+                        <span className="font-bold text-foreground">{String(call.backers || 0)}</span>
                     </div>
                     <div className="flex justify-between items-center text-sm">
                         <span className="text-muted-foreground">Total Staked</span>
-                        <span className="font-bold text-green-500">{call.totalStakeYes} USDC</span>
+                        <span className="font-bold text-green-500">{String(call.totalStakeYes || 0)} USDC</span>
                     </div>
                     <div className="flex justify-between items-center text-sm">
                         <span className="text-muted-foreground">Challenged</span>
-                        <span className="font-bold text-red-500">{call.totalStakeNo} USDC</span>
+                        <span className="font-bold text-red-500">{String(call.totalStakeNo || 0)} USDC</span>
                     </div>
                     <div className="h-px bg-border my-2" />
                     <div className="flex justify-between items-center text-sm">
@@ -98,16 +98,16 @@ export default function CallDetailPage() {
             <div className="bg-secondary/20 rounded-xl p-6 border border-border">
                 <h3 className="font-bold text-lg mb-4">About Creator</h3>
                 <div className="flex items-center gap-3 mb-4">
-                    <div className={`h-12 w-12 rounded-full ${call.creator.avatar || 'bg-primary'} flex items-center justify-center font-bold text-white`}>
-                        {(call.creator.displayName || call.creator.wallet.slice(0, 6)).substring(0, 2).toUpperCase()}
+                    <div className={`h-12 w-12 rounded-full ${call.creator?.avatar || 'bg-primary'} flex items-center justify-center font-bold text-white`}>
+                        {(call.creator?.displayName || call.creator?.wallet?.slice(0, 6) || "U").substring(0, 2).toUpperCase()}
                     </div>
                     <div>
-                        <div className="font-bold">{call.creator.displayName || call.creator.wallet.slice(0, 6)}</div>
-                        <div className="text-xs text-muted-foreground">{call.creator.handle || '@anonymous'}</div>
+                        <div className="font-bold">{call.creator?.displayName || call.creator?.wallet?.slice(0, 6) || "Anonymous"}</div>
+                        <div className="text-xs text-muted-foreground">{call.creator?.handle || '@anonymous'}</div>
                     </div>
                 </div>
                 <p className="text-sm text-muted-foreground">
-                    This creator has made {call.backers} successful predictions with a total volume of {call.volume}.
+                    This creator has made {String(call.backers || 0)} successful predictions with a total volume of {String(call.volume || "$0")}.
                 </p>
             </div>
         </div>
@@ -123,7 +123,7 @@ export default function CallDetailPage() {
                     <ArrowLeft className="h-5 w-5" />
                 </Link>
                 <div className="flex-1">
-                    <h1 className="text-lg font-bold truncate">{call.asset}/{call.target}</h1>
+                    <h1 className="text-lg font-bold truncate">{String(call.asset || "Unknown")}/{String(call.target || "TBD")}</h1>
                     <p className="text-xs text-muted-foreground">Market Detail</p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -140,8 +140,8 @@ export default function CallDetailPage() {
                 {/* Price Chart Section */}
                 <section className="mb-8">
                     <PriceChart 
-                        asset={call.asset} 
-                        target={call.target} 
+                        asset={call.asset || "Unknown"} 
+                        target={call.target || "TBD"} 
                         startPrice={startPrice}
                         targetPrice={targetPrice}
                     />
@@ -150,21 +150,21 @@ export default function CallDetailPage() {
                 {/* Call Header Info */}
                 <div className="mb-6">
                     <div className="flex items-center gap-2 mb-4">
-                        <div className={`h-10 w-10 rounded-full ${call.creator.avatar || 'bg-primary'} flex items-center justify-center font-bold text-white text-sm`}>
-                            {(call.creator.displayName || call.creator.wallet.slice(0, 6)).substring(0, 2).toUpperCase()}
+                        <div className={`h-10 w-10 rounded-full ${call.creator?.avatar || 'bg-primary'} flex items-center justify-center font-bold text-white text-sm`}>
+                            {(call.creator?.displayName || call.creator?.wallet?.slice(0, 6) || "U").substring(0, 2).toUpperCase()}
                         </div>
                         <div>
-                            <div className="font-bold">{call.creator.displayName || call.creator.wallet.slice(0, 6)}</div>
-                            <div className="text-xs text-muted-foreground">{call.creator.handle || '@anonymous'} • {call.createdAt}</div>
+                            <div className="font-bold">{call.creator?.displayName || call.creator?.wallet?.slice(0, 6) || "Anonymous"}</div>
+                            <div className="text-xs text-muted-foreground">{call.creator?.handle || '@anonymous'} • {call.createdAt || "Unknown date"}</div>
                         </div>
                     </div>
 
-                    <h1 className="text-2xl font-bold mb-4 leading-tight">{call.title}</h1>
+                    <h1 className="text-2xl font-bold mb-4 leading-tight">{call.title || "Untitled Call"}</h1>
 
                     <div className="flex flex-wrap gap-3 mb-6">
-                        <Badge icon={<TrendingUp className="h-4 w-4" />} label={`${call.asset} ➜ ${call.target}`} color="primary" />
-                        <Badge icon={<ShieldCheck className="h-4 w-4" />} label={`Stake: ${call.stake}`} color="accent" />
-                        <Badge icon={<Clock className="h-4 w-4" />} label={`By ${call.deadline}`} color="secondary" />
+                        <Badge icon={<TrendingUp className="h-4 w-4" />} label={`${String(call.asset || "Unknown")} ➜ ${String(call.target || "TBD")}`} color="primary" />
+                        <Badge icon={<ShieldCheck className="h-4 w-4" />} label={`Stake: ${String(call.stake || "0 USDC")}`} color="accent" />
+                        <Badge icon={<Clock className="h-4 w-4" />} label={`By ${call.deadline || "TBD"}`} color="secondary" />
                     </div>
                 </div>
 
@@ -175,15 +175,15 @@ export default function CallDetailPage() {
                             <Target className="h-5 w-5 text-primary" />
                             <h3 className="font-bold text-sm uppercase tracking-wider text-muted-foreground">Creator&apos;s Thesis</h3>
                         </div>
-                        <p className="text-lg leading-relaxed text-foreground">{call.thesis}</p>
+                        <p className="text-lg leading-relaxed text-foreground">{call.thesis || "No thesis provided."}</p>
                         <div className="mt-4 pt-4 border-t border-border/50 flex items-center gap-4 text-sm text-muted-foreground">
                             <span className="flex items-center gap-1">
                                 <Wallet className="h-4 w-4" />
-                                Stake: {call.stake}
+                                Stake: {String(call.stake || "0 USDC")}
                             </span>
                             <span className="flex items-center gap-1">
                                 <Clock className="h-4 w-4" />
-                                Deadline: {call.deadline}
+                                Deadline: {call.deadline || "TBD"}
                             </span>
                         </div>
                     </div>
@@ -252,11 +252,11 @@ export default function CallDetailPage() {
                     <div className="flex gap-6">
                         <div className="flex items-center gap-2 text-muted-foreground">
                             <Users className="h-5 w-5" />
-                            <span className="font-medium">{call.backers} Backers</span>
+                            <span className="font-medium">{String(call.backers || 0)} Backers</span>
                         </div>
                         <div className="flex items-center gap-2 text-muted-foreground">
                             <MessageSquare className="h-5 w-5" />
-                            <span className="font-medium">{call.comments} Comments</span>
+                            <span className="font-medium">{String(call.comments || 0)} Comments</span>
                         </div>
                     </div>
                 </div>

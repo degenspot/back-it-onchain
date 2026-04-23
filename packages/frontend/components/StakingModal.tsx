@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useState } from 'react';
+import { type Call } from '../lib/types';
 
-export default function StakingModal({ open, call, onClose }: { open: boolean; call: any | null; onClose: () => void }) {
+export default function StakingModal({ open, call, onClose }: { open: boolean; call: Call | null; onClose: () => void }) {
   const [amount, setAmount] = useState('');
   if (!open || !call) return null;
   return (

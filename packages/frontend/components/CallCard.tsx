@@ -4,10 +4,11 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { TrendingUp, Clock, ShieldCheck, MessageSquare, MoreHorizontal, Flag } from "lucide-react";
 
+import { type Call } from "@/lib/types";
+
 interface CallCardProps {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  call: any;
-  onQuickStake?: (call: any) => void;
+  call: Call;
+  onQuickStake?: (call: Call) => void;
 }
 
 const CHAIN_CONFIG = {
@@ -53,7 +54,7 @@ export function CallCard({ call }: CallCardProps) {
   const chain = call.chain || "base";
   const explorerUrl = getExplorerUrl(
     chain,
-    call.creatorWallet || call.creator?.wallet,
+    call.creatorWallet || call.creator?.wallet || "",
   );
 
   // Countdown state
@@ -62,7 +63,7 @@ export function CallCard({ call }: CallCardProps) {
   useEffect(() => {
     function compute() {
       const now = Date.now();
-      const end = new Date(call.endTs).getTime();
+      const end = call.endTs ? new Date(call.endTs).getTime() : 0;
       const diff = Math.max(0, end - now);
       if (diff === 0) return setTimeRemaining("Ended");
       const mins = Math.floor(diff / 60000);
@@ -78,7 +79,7 @@ export function CallCard({ call }: CallCardProps) {
   }, [call.endTs]);
 
   // Determine "hot" markets by simple heuristic: large pool
-  const pool = (parseFloat(call.totalStakeYes || 0) || 0) + (parseFloat(call.totalStakeNo || 0) || 0);
+  const pool = (parseFloat(String(call.totalStakeYes || 0)) || 0) + (parseFloat(String(call.totalStakeNo || 0)) || 0);
   const isHot = pool >= 100; // threshold for pulse animation
 
   // Optimistic UI state
@@ -136,7 +137,7 @@ export function CallCard({ call }: CallCardProps) {
                     "Unknown User"}
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  {new Date(call.createdAt).toLocaleDateString()}
+                  {call.createdAt ? new Date(call.createdAt).toLocaleDateString() : 'Unknown date'}
                 </div>
               </div>
             </div>
@@ -199,7 +200,7 @@ export function CallCard({ call }: CallCardProps) {
             />
             <Badge
               icon={<ShieldCheck className="h-3 w-3" />}
-              label={`Pool: ${parseFloat(call.totalStakeYes || 0) + parseFloat(call.totalStakeNo || 0)}`}
+              label={`Pool: ${parseFloat(String(call.totalStakeYes || 0)) + parseFloat(String(call.totalStakeNo || 0))}`}
             />
           </div>
 

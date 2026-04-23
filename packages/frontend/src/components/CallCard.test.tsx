@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
@@ -7,6 +8,7 @@ import { CallCard } from '../../components/CallCard';
 // Mock next/link
 vi.mock('next/link', () => {
   return {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     default: ({ children, href }: any) => {
       return <a href={href}>{children}</a>;
     }
@@ -38,7 +40,7 @@ describe('CallCard Component', () => {
 
   describe('Title Rendering', () => {
     it('should render call title from conditionJson if available', () => {
-      render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       expect(screen.getByText('Bitcoin ETF Approval by Q1 2024')).toBeInTheDocument();
     });
 
@@ -62,7 +64,7 @@ describe('CallCard Component', () => {
     });
 
     it('should display title with correct styling', () => {
-      render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       const titleElement = screen.getByText('Bitcoin ETF Approval by Q1 2024');
       expect(titleElement).toHaveClass('text-lg', 'font-bold');
     });
@@ -70,24 +72,24 @@ describe('CallCard Component', () => {
 
   describe('Price/Pool Display', () => {
     it('should display stake token and pool label', () => {
-      render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       expect(screen.getByText('USDC Pool')).toBeInTheDocument();
     });
 
     it('should display YES stake amount', () => {
-      render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       expect(screen.getByText('5000')).toBeInTheDocument();
       expect(screen.getByText(/YES/)).toBeInTheDocument();
     });
 
     it('should display NO stake amount', () => {
-      render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       expect(screen.getByText('3000')).toBeInTheDocument();
       expect(screen.getByText(/NO/)).toBeInTheDocument();
     });
 
     it('should calculate and display total pool correctly', () => {
-      render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       const poolText = screen.getByText(/Pool: 8000/);
       expect(poolText).toBeInTheDocument();
     });
@@ -131,7 +133,7 @@ describe('CallCard Component', () => {
 
   describe('End Date/Time Remaining Display', () => {
     it('should display countdown for calls happening in the future', () => {
-      render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       expect(screen.getByText(/Ends in \d+[dhm]/)).toBeInTheDocument();
     });
 
@@ -177,7 +179,7 @@ describe('CallCard Component', () => {
 
   describe('Stake Button Visibility & Interaction', () => {
     it('should render Quick Stake button', () => {
-      render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       expect(screen.getByText('Quick Stake')).toBeInTheDocument();
     });
 
@@ -190,7 +192,7 @@ describe('CallCard Component', () => {
 
     it('should dispatch custom event on Quick Stake button click', () => {
       const dispatchEventSpy = vi.spyOn(window, 'dispatchEvent');
-      render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       
       const stakeButton = screen.getByText('Quick Stake');
       fireEvent.click(stakeButton);
@@ -205,7 +207,7 @@ describe('CallCard Component', () => {
     });
 
     it('should prevent default and stop propagation on Quick Stake click', () => {
-      render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       const stakeButton = screen.getByText('Quick Stake');
       
       const event = new MouseEvent('click', { bubbles: true, cancelable: true });
@@ -222,7 +224,7 @@ describe('CallCard Component', () => {
     });
 
     it('should have correct styling for Quick Stake button', () => {
-      render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       const stakeButton = screen.getByText('Quick Stake');
       expect(stakeButton).toHaveClass('bg-primary', 'text-white', 'text-sm');
     });
@@ -245,7 +247,7 @@ describe('CallCard Component', () => {
     });
 
     it('should display creator display name', () => {
-      render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       expect(screen.getByText('John Predictor')).toBeInTheDocument();
     });
 
@@ -261,18 +263,18 @@ describe('CallCard Component', () => {
     });
 
     it('should display call creation date', () => {
-      render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       const dateText = new Date(mockCall.createdAt).toLocaleDateString();
       expect(screen.getByText(dateText)).toBeInTheDocument();
     });
 
     it('should display status badge', () => {
-      render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       expect(screen.getByText('active')).toBeInTheDocument();
     });
 
     it('should display comments count', () => {
-      render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       expect(screen.getByText('12 Comments')).toBeInTheDocument();
     });
 
@@ -288,7 +290,7 @@ describe('CallCard Component', () => {
 
   describe('Chain Badge Display', () => {
     it('should display Base chain badge', () => {
-      render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       expect(screen.getByText('Base')).toBeInTheDocument();
     });
 
@@ -313,12 +315,12 @@ describe('CallCard Component', () => {
 
   describe('Explorer Link', () => {
     it('should render View on Explorer link', () => {
-      render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       expect(screen.getByText(/View on Explorer/)).toBeInTheDocument();
     });
 
     it('should link to correct Base Sepolia explorer URL', () => {
-      render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       const explorerLink = screen.getByText(/View on Explorer/).closest('a');
       expect(explorerLink).toHaveAttribute(
         'href',
@@ -340,7 +342,7 @@ describe('CallCard Component', () => {
     });
 
     it('should open explorer in new tab', () => {
-      render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       const explorerLink = screen.getByText(/View on Explorer/).closest('a');
       expect(explorerLink).toHaveAttribute('target', '_blank');
       expect(explorerLink).toHaveAttribute('rel', 'noopener noreferrer');
@@ -349,13 +351,13 @@ describe('CallCard Component', () => {
 
   describe('Report Functionality', () => {
     it('should render more options button', () => {
-      render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       const moreButton = screen.getByLabelText('More options');
       expect(moreButton).toBeInTheDocument();
     });
 
     it('should show Report Call option when more menu is clicked', async () => {
-      render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       const moreButton = screen.getByLabelText('More options');
       
       fireEvent.click(moreButton);
@@ -366,7 +368,7 @@ describe('CallCard Component', () => {
     });
 
     it('should display report modal when Report Call is clicked', async () => {
-      render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       const moreButton = screen.getByLabelText('More options');
       
       fireEvent.click(moreButton);
@@ -383,7 +385,7 @@ describe('CallCard Component', () => {
     });
 
     it('should close modal when Cancel is clicked', async () => {
-      render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       const moreButton = screen.getByLabelText('More options');
       
       fireEvent.click(moreButton);
