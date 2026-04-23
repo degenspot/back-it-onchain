@@ -46,8 +46,8 @@ impl Governance {
     // 🔐 OWNERSHIP (MULTISIG READY)
     // ---------------------------
     pub fn transfer_ownership(e: Env, caller: Address, new_owner: Address) {
-        require_owner(&e, &caller);
-        start_transfer(&e, new_owner);
+        transfer_ownership(&e, new_owner);
+        accept_ownership(&e);
     }
 
     pub fn accept_ownership(e: Env) {
