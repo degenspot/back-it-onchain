@@ -1,12 +1,15 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
-import { CallCard } from '../components/CallCard';
+import { describe, it, expect, vi } from 'vitest';
+import { CallCard } from '../../components/CallCard';
 
 // Mock next/link
-jest.mock('next/link', () => {
-  return ({ children, href }: any) => {
-    return <a href={href}>{children}</a>;
+vi.mock('next/link', () => {
+  return {
+    default: ({ children, href }: any) => {
+      return <a href={href}>{children}</a>;
+    }
   };
 });
 
@@ -106,7 +109,7 @@ describe('CallCard Component', () => {
         totalStakeNo: undefined,
       };
       render(<CallCard call={callWithoutStakes} />);
-      expect(screen.getByText('0')).toBeInTheDocument();
+      expect(screen.getAllByText('0').length).toBeGreaterThan(0);
     });
 
     it('should display YES in green color', () => {
@@ -186,7 +189,7 @@ describe('CallCard Component', () => {
     });
 
     it('should dispatch custom event on Quick Stake button click', () => {
-      const dispatchEventSpy = jest.spyOn(window, 'dispatchEvent');
+      const dispatchEventSpy = vi.spyOn(window, 'dispatchEvent');
       render(<CallCard call={mockCall} />);
       
       const stakeButton = screen.getByText('Quick Stake');
@@ -205,11 +208,11 @@ describe('CallCard Component', () => {
       render(<CallCard call={mockCall} />);
       const stakeButton = screen.getByText('Quick Stake');
       
-      const event = new MouseEvent('click', { bubbles: true });
-      const preventDefaultSpy = jest.spyOn(event, 'preventDefault');
-      const stopPropagationSpy = jest.spyOn(event, 'stopPropagation');
+      const event = new MouseEvent('click', { bubbles: true, cancelable: true });
+      const preventDefaultSpy = vi.spyOn(event, 'preventDefault');
+      const stopPropagationSpy = vi.spyOn(event, 'stopPropagation');
       
-      fireEvent.click(stakeButton, event);
+      fireEvent(stakeButton, event);
       
       expect(preventDefaultSpy).toHaveBeenCalled();
       expect(stopPropagationSpy).toHaveBeenCalled();
@@ -475,7 +478,7 @@ describe('CallCard Component', () => {
         stakeToken: undefined,
       };
       render(<CallCard call={callWithoutToken} />);
-      expect(screen.getByText(/Pool/)).toBeInTheDocument();
+      expect(screen.getAllByText(/Pool/).length).toBeGreaterThan(0);
     });
   });
 });
