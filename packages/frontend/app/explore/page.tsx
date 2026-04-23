@@ -3,6 +3,13 @@
 import { AppLayout } from "@/components/AppLayout";
 import { Search, TrendingUp } from 'lucide-react';
 
+/** Trigger the global Cmd/Ctrl+K search palette programmatically */
+function openSearchPalette() {
+  window.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true })
+  );
+}
+
 export default function ExplorePage() {
     const RightSidebar = (
         <div className="space-y-6">
@@ -20,15 +27,17 @@ export default function ExplorePage() {
     return (
         <AppLayout rightSidebar={RightSidebar}>
             <div className="p-4">
-                {/* Search Bar */}
-                <div className="relative mb-8">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
-                    <input
-                        type="text"
-                        placeholder="Search markets, users, or tags..."
-                        className="w-full bg-secondary/50 border border-border rounded-xl pl-10 pr-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
-                    />
-                </div>
+                {/* Search Bar — opens Cmd/Ctrl+K palette */}
+                <button
+                  onClick={openSearchPalette}
+                  className="relative w-full mb-8 flex items-center gap-3 bg-secondary/50 border border-border rounded-xl px-4 py-3 text-muted-foreground hover:border-primary/50 transition-colors text-left"
+                >
+                  <Search className="h-5 w-5 shrink-0" />
+                  <span className="flex-1 text-sm">Search markets, users, or tokens…</span>
+                  <kbd className="hidden sm:inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[10px]">
+                    ⌘K
+                  </kbd>
+                </button>
 
                 {/* Trending Topics */}
                 <section className="mb-8">

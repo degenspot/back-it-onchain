@@ -9,6 +9,8 @@ import { Logo } from "@/components/logo";
 import { ChainSelector } from "@/components/ChainSelector";
 import { useChain } from "@/components/ChainProvider";
 import { NotificationBell } from "@/components/NotificationBell";
+import { showInfoToast } from "@/components/tx-toast";
+import { SearchPalette } from "@/components/SearchPalette";
 
 import { cn } from "@/lib/utils";
 import {
@@ -44,6 +46,7 @@ export function Nav() {
 
   return (
     <>
+      <SearchPalette />
       {/* Desktop Sidebar */}
       <nav className="hidden md:flex sticky top-0 h-screen w-64 border-r border-border flex-col p-4 bg-background z-50 shrink-0">
         <div className="mb-8 px-2 flex justify-between items-center">
@@ -104,7 +107,7 @@ export function Nav() {
             </Wallet>
           ) : (
             <button
-              onClick={() => alert("Stellar Wallet Connection Coming Soon!")}
+              onClick={() => showInfoToast({ title: "Coming soon", description: "Stellar wallet connection is coming soon!" })}
               className="w-full py-3 px-4 rounded-xl bg-white text-black font-bold flex items-center justify-center gap-2 hover:bg-gray-800 transition-all"
             >
               <div className="relative w-5 h-5">
