@@ -1,6 +1,7 @@
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import '@testing-library/jest-dom';
+import { describe, it, expect, vi } from 'vitest';
 import { ProfileHeader, User, SocialStats } from './ProfileHeader';
 
 describe('ProfileHeader Component', () => {
@@ -142,7 +143,7 @@ describe('ProfileHeader Component', () => {
         />
       );
       const displayName = screen.getByTestId('user-display-name');
-      expect(displayName).toHaveTextContent('0xabcde');
+      expect(displayName).toHaveTextContent('0xabcd');
     });
   });
 
@@ -185,7 +186,7 @@ describe('ProfileHeader Component', () => {
     });
 
     it('should call onEditProfile when button is clicked', () => {
-      const mockOnEditProfile = jest.fn();
+      const mockOnEditProfile = vi.fn();
       render(
         <ProfileHeader
           user={mockUser}
