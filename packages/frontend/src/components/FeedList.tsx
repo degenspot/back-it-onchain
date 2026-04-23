@@ -1,8 +1,9 @@
 import React from 'react';
+import { type Call } from '../../lib/types';
 
 export interface FeedListProps {
   isLoading?: boolean;
-  calls?: any[];
+  calls?: Call[];
 }
 
 export function FeedList({ isLoading, calls = [] }: FeedListProps) {

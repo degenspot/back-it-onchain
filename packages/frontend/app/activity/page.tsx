@@ -137,7 +137,7 @@ export default function ActivityPage() {
                             </div>
                             <h3 className="text-lg font-bold text-foreground">No activity yet</h3>
                             <p className="text-muted-foreground text-sm mt-2 max-w-xs">
-                                When you receive stakes, new followers, or your markets resolve, they'll appear here.
+                                When you receive stakes, new followers, or your markets resolve, they&apos;ll appear here.
                             </p>
                         </div>
                     )}

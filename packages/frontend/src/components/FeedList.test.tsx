@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import React from 'react';
 import { render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom';
@@ -31,7 +32,7 @@ describe('FeedList Component', () => {
   });
 
   it('renders a list of CallCards when calls are provided', () => {
-    render(<FeedList isLoading={false} calls={mockCalls} />);
+    render(<FeedList isLoading={false} calls={mockCalls as any} />);
     const callCards = screen.getAllByTestId('call-card');
     expect(callCards).toHaveLength(2);
     expect(screen.getByText('Bitcoin to 100k')).toBeInTheDocument();

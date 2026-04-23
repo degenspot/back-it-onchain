@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils';
 export interface NotificationData {
   id: string;
   type: 'market_resolved' | 'stake_received' | 'new_follower';
-  payload: Record<string, any>;
+  payload: Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
   isRead: boolean;
   createdAt: string;
   resourceId?: string;

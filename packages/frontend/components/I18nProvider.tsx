@@ -1,11 +1,11 @@
 "use client";
 
-import { NextIntlClientProvider } from "next-intl";
+import { NextIntlClientProvider, type AbstractIntlMessages } from "next-intl";
 import React, { useState, useEffect } from "react";
 import en from "@/messages/en.json";
 import es from "@/messages/es.json";
 
-const messages: Record<string, any> = { en, es };
+const messages: Record<string, AbstractIntlMessages> = { en, es };
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {
   const [locale, setLocale] = useState("en");
@@ -21,11 +21,11 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
     const handleLocaleChange = (e: CustomEvent<{ locale: string }>) => {
       setLocale(e.detail.locale);
     };
-    window.addEventListener("localeChange" as any, handleLocaleChange as any);
+    window.addEventListener("localeChange" as keyof WindowEventMap, handleLocaleChange as EventListener);
     return () =>
       window.removeEventListener(
-        "localeChange" as any,
-        handleLocaleChange as any,
+        "localeChange" as keyof WindowEventMap,
+        handleLocaleChange as EventListener,
       );
   }, []);
 

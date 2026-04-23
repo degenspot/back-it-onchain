@@ -13,40 +13,9 @@ import {
   showWarningToast,
   showInfoToast,
 } from './tx-toast';
-import { useSocket } from '../hooks/useSocket';
+import { useSocket, type SocketCallEvent } from '../hooks/useSocket';
+import { type Call, type User } from '../lib/types';
 
-export interface Call {
-  id: string; // callOnchainId
-  title: string;
-  thesis: string;
-  asset: string;
-  target: string;
-  deadline: string;
-  stake: string;
-  creator: User;
-  status: string;
-  createdAt: string;
-  backers: number;
-  comments: number;
-  volume: string;
-  totalStakeYes: number;
-  totalStakeNo: number;
-  stakeToken: string;
-  endTs: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  conditionJson?: any;
-  chain?: "base" | "stellar";
-}
-
-export interface User {
-  wallet: string;
-  displayName?: string;
-  handle?: string;
-  bio?: string;
-  avatarCid?: string;
-  referredBy?: string;
-  avatar?: string; // Legacy UI
-}
 
 interface GlobalStateContextType {
   calls: Call[];
@@ -125,7 +94,7 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
   }, []);
 
   useSocket({
-    onCallCreated: useCallback((data) => {
+    onCallCreated: useCallback((data: SocketCallEvent) => {
       const call: Call = {
         id: data.callOnchainId ?? data.id ?? String(Math.random()),
         title: data.conditionJson?.title ?? `Call #${data.callOnchainId ?? data.id}`,
@@ -149,7 +118,7 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
       };
       mergeCall(call);
     }, [mergeCall]),
-    onStakeAdded: useCallback((data) => {
+    onStakeAdded: useCallback((data: SocketCallEvent) => {
       setCalls((prev) =>
         prev.map((c) =>
           c.id === (data.callOnchainId ?? data.id)
@@ -157,13 +126,13 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
                 ...c,
                 totalStakeYes: Number(data.totalStakeYes ?? c.totalStakeYes),
                 totalStakeNo: Number(data.totalStakeNo ?? c.totalStakeNo),
-                backers: c.backers + 1,
+                backers: (c.backers || 0) + 1,
               }
             : c,
         ),
       );
     }, []),
-    onOutcomeResolved: useCallback((data) => {
+    onOutcomeResolved: useCallback((data: SocketCallEvent) => {
       setCalls((prev) =>
         prev.map((c) =>
           c.id === (data.callOnchainId ?? data.id)
@@ -326,7 +295,7 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
         return;
       }
 
-      const stakeAmount = parseEther(newCallData.stake.split(" ")[0]);
+      const stakeAmount = parseEther((newCallData.stake || "").split(" ")[0] || "0");
       const tokenAddress = process.env.NEXT_PUBLIC_MOCK_TOKEN_ADDRESS as `0x${string}`;
       const registryAddress = process.env.NEXT_PUBLIC_CALL_REGISTRY_ADDRESS as `0x${string}`;
 
@@ -361,7 +330,7 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
       });
 
       // 3. Create Call
-      const deadlineTimestamp = Math.floor(new Date(newCallData.deadline).getTime() / 1000);
+      const deadlineTimestamp = Math.floor(new Date(newCallData.deadline || "").getTime() / 1000);
       await trackEvmTransaction({
         submittedTitle: "Tx Submitted: Create call",
         confirmedTitle: "Tx Confirmed: Create call",
@@ -376,7 +345,7 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
               stakeAmount,
               BigInt(deadlineTimestamp),
               tokenAddress,
-              stringToHex(newCallData.asset, { size: 32 }),
+              stringToHex(newCallData.asset || "", { size: 32 }),
               cid,
             ],
           }),
@@ -397,10 +366,10 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
         backers: 1,
         comments: 0,
         volume: `$${newCallData.stake}`,
-        totalStakeYes: parseFloat(newCallData.stake.split(" ")[0]) || 0,
+        totalStakeYes: parseFloat((newCallData.stake || "").split(" ")[0]) || 0,
         totalStakeNo: 0,
         stakeToken: process.env.NEXT_PUBLIC_MOCK_TOKEN_ADDRESS || "USDC",
-        endTs: new Date(newCallData.deadline).toISOString(),
+        endTs: new Date(newCallData.deadline || "").toISOString(),
       };
       setCalls((prev) => [newCall, ...prev]);
     } catch (error) {
@@ -452,11 +421,11 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
       setCalls((prev) =>
         prev.map((call) => {
           if (call.id === callId) {
-            const currentVolume = parseFloat(call.volume.replace(/[^0-9.-]+/g, "")) || 0;
+            const currentVolume = parseFloat(String(call.volume || "").replace(/[^0-9.-]+/g, "")) || 0;
             const newVolume = currentVolume + amount;
             return {
               ...call,
-              backers: call.backers + 1,
+              backers: (call.backers || 0) + 1,
               volume: `$${newVolume.toLocaleString()}`,
             };
           }
