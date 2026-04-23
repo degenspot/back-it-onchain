@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { useWriteContract, usePublicClient, useAccount, useChainId } from 'wagmi';
 import { parseEther, stringToHex, type Hash } from 'viem';
 import { CallRegistryABI, ERC20ABI } from '../lib/abis';
@@ -10,7 +10,10 @@ import {
   showTxConfirmedToast,
   showTxFailedToast,
   showTxSubmittedToast,
+  showWarningToast,
+  showInfoToast,
 } from './tx-toast';
+import { useSocket } from '../hooks/useSocket';
 
 export interface Call {
   id: string; // callOnchainId
@@ -54,6 +57,8 @@ interface GlobalStateContextType {
   login: () => Promise<void>;
   setPendingReferrerWallet: (referrerWallet: string | null) => void;
   updateProfile: (data: { handle: string; bio: string }) => Promise<void>;
+  newCallsBanner: boolean;
+  dismissNewCallsBanner: () => void;
 }
 
 const GlobalStateContext = createContext<GlobalStateContextType | undefined>(
@@ -92,6 +97,7 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
   const [calls, setCalls] = useState<Call[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [newCallsBanner, setNewCallsBanner] = useState(false);
   const [pendingReferrerWallet, setPendingReferrerWallet] = useState<
     string | null
   >(null);
@@ -106,6 +112,67 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
 
   const address = selectedChain === 'stellar' ? stellarAddress : evmAddress;
   const isConnected = selectedChain === 'stellar' ? isStellarConnected : isEvmConnected;
+
+  const dismissNewCallsBanner = useCallback(() => setNewCallsBanner(false), []);
+
+  const mergeCall = useCallback((incoming: Call) => {
+    setCalls((prev) => {
+      const exists = prev.some((c) => c.id === incoming.id);
+      if (exists) return prev.map((c) => (c.id === incoming.id ? { ...c, ...incoming } : c));
+      setNewCallsBanner(true);
+      return [incoming, ...prev];
+    });
+  }, []);
+
+  useSocket({
+    onCallCreated: useCallback((data) => {
+      const call: Call = {
+        id: data.callOnchainId ?? data.id ?? String(Math.random()),
+        title: data.conditionJson?.title ?? `Call #${data.callOnchainId ?? data.id}`,
+        thesis: data.conditionJson?.thesis ?? "",
+        asset: data.asset ?? "",
+        target: data.conditionJson?.target ?? "",
+        deadline: data.endTs ? new Date(data.endTs).toLocaleDateString() : "",
+        stake: `${data.totalStakeYes ?? 0} ${data.stakeToken ?? "USDC"}`,
+        creator: data.creator ?? { wallet: data.creatorWallet ?? "" },
+        status: data.status ?? "active",
+        createdAt: data.createdAt ?? new Date().toISOString(),
+        backers: 0,
+        comments: 0,
+        volume: `$${Number(data.totalStakeYes ?? 0) + Number(data.totalStakeNo ?? 0)}`,
+        totalStakeYes: Number(data.totalStakeYes ?? 0),
+        totalStakeNo: Number(data.totalStakeNo ?? 0),
+        stakeToken: data.stakeToken ?? "USDC",
+        endTs: data.endTs ?? "",
+        conditionJson: data.conditionJson,
+        chain: data.chain,
+      };
+      mergeCall(call);
+    }, [mergeCall]),
+    onStakeAdded: useCallback((data) => {
+      setCalls((prev) =>
+        prev.map((c) =>
+          c.id === (data.callOnchainId ?? data.id)
+            ? {
+                ...c,
+                totalStakeYes: Number(data.totalStakeYes ?? c.totalStakeYes),
+                totalStakeNo: Number(data.totalStakeNo ?? c.totalStakeNo),
+                backers: c.backers + 1,
+              }
+            : c,
+        ),
+      );
+    }, []),
+    onOutcomeResolved: useCallback((data) => {
+      setCalls((prev) =>
+        prev.map((c) =>
+          c.id === (data.callOnchainId ?? data.id)
+            ? { ...c, status: data.status ?? "resolved" }
+            : c,
+        ),
+      );
+    }, []),
+  });
 
   const fetchCalls = async () => {
     try {
@@ -249,13 +316,13 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
 
   const createCall = async (newCallData: Omit<Call, 'id' | 'creator' | 'status' | 'createdAt' | 'backers' | 'comments' | 'volume' | 'totalStakeYes' | 'totalStakeNo' | 'stakeToken' | 'endTs' | 'conditionJson'>) => {
     if (!currentUser) {
-      alert("Please connect wallet first");
+      showWarningToast({ title: "Wallet not connected", description: "Please connect your wallet first." });
       return;
     }
     setIsLoading(true);
     try {
       if (selectedChain === 'stellar') {
-        alert("Stellar call creation not implemented yet");
+        showInfoToast({ title: "Coming soon", description: "Stellar call creation is not implemented yet." });
         return;
       }
 
@@ -336,8 +403,6 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
         endTs: new Date(newCallData.deadline).toISOString(),
       };
       setCalls((prev) => [newCall, ...prev]);
-
-      setTimeout(fetchCalls, 8000);
     } catch (error) {
       console.error("Failed to create call:", error);
     } finally {
@@ -349,7 +414,7 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
     setIsLoading(true);
     try {
       if (selectedChain === 'stellar') {
-        alert("Stellar staking not implemented yet");
+        showInfoToast({ title: "Coming soon", description: "Stellar staking is not implemented yet." });
         return;
       }
 
@@ -416,8 +481,21 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
         login,
         setPendingReferrerWallet,
         updateProfile,
+        newCallsBanner,
+        dismissNewCallsBanner,
       }}
     >
+      {newCallsBanner && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-full bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground shadow-lg">
+          New calls available
+          <button
+            onClick={dismissNewCallsBanner}
+            className="ml-1 text-primary-foreground/70 hover:text-primary-foreground"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       {children}
     </GlobalStateContext.Provider>
   );

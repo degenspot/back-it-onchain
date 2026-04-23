@@ -100,3 +100,44 @@ export const showTxConfirmedToast = (options: TxToastOptions) => {
 export const showTxFailedToast = (options: TxToastOptions) => {
   showTxToast("failed", options);
 };
+
+interface SimpleToastOptions {
+  title: string;
+  description: string;
+}
+
+const SIMPLE_TOAST_DURATION_MS = 5_000;
+
+export const showWarningToast = ({ title, description }: SimpleToastOptions) => {
+  toast.custom(
+    () => (
+      <div className="w-[340px] rounded-lg border border-zinc-700 bg-zinc-900 p-3 text-white shadow-xl">
+        <div className="flex items-start gap-2">
+          <AlertCircle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold">{title}</p>
+            <p className="mt-1 text-xs text-zinc-300">{description}</p>
+          </div>
+        </div>
+      </div>
+    ),
+    { duration: SIMPLE_TOAST_DURATION_MS },
+  );
+};
+
+export const showInfoToast = ({ title, description }: SimpleToastOptions) => {
+  toast.custom(
+    () => (
+      <div className="w-[340px] rounded-lg border border-zinc-700 bg-zinc-900 p-3 text-white shadow-xl">
+        <div className="flex items-start gap-2">
+          <Clock3 className="h-5 w-5 text-sky-400 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold">{title}</p>
+            <p className="mt-1 text-xs text-zinc-300">{description}</p>
+          </div>
+        </div>
+      </div>
+    ),
+    { duration: SIMPLE_TOAST_DURATION_MS },
+  );
+};
