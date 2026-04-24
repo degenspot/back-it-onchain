@@ -6,6 +6,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useGlobalState } from "@/components/GlobalState";
 import { useChain } from "@/components/ChainProvider";
+import { formatJoinedDate } from "@/lib/utils";
 
 import { CallCard } from "@/components/CallCard";
 
@@ -64,6 +65,7 @@ export default function ProfilePage() {
 
     const myCalls = calls.filter(call => call.creator?.wallet.toLowerCase() === currentUser.wallet.toLowerCase());
     const inviteLink = `${origin}/onboarding?ref=${encodeURIComponent(currentUser.wallet)}`;
+    const joinedDateLabel = formatJoinedDate(currentUser.createdAt);
 
     const copyInviteLink = async () => {
         try {
@@ -127,10 +129,12 @@ export default function ProfilePage() {
                                 <LinkIcon className="h-3 w-3" />
                                 <a href="#" className="hover:text-primary hover:underline">backit.xyz</a>
                             </div>
-                            <div className="flex items-center gap-1">
-                                <Calendar className="h-3 w-3" />
-                                Joined Nov 2025
-                            </div>
+                            {joinedDateLabel && (
+                                <div className="flex items-center gap-1">
+                                    <Calendar className="h-3 w-3" />
+                                    {joinedDateLabel}
+                                </div>
+                            )}
                         </div>
 
                         <div className="flex gap-4 mt-4 text-sm">

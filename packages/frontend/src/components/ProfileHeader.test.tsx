@@ -262,12 +262,34 @@ describe('ProfileHeader Component', () => {
       expect(websiteLink).toHaveAttribute('href', 'https://backit.xyz');
     });
 
-    it('should display join date', () => {
+    it('should display join date derived from createdAt', () => {
+      const userWithCreatedAt: User = {
+        ...mockUser,
+        createdAt: '2025-03-15T12:00:00.000Z',
+      };
+      render(
+        <ProfileHeader user={userWithCreatedAt} socialStats={mockSocialStats} />
+      );
+      const joinDateInfo = screen.getByTestId('join-date-info');
+      expect(joinDateInfo).toHaveTextContent('Joined Mar 2025');
+    });
+
+    it('should not display join date when createdAt is missing', () => {
       render(
         <ProfileHeader user={mockUser} socialStats={mockSocialStats} />
       );
-      const joinDateInfo = screen.getByTestId('join-date-info');
-      expect(joinDateInfo).toHaveTextContent('Joined Nov 2025');
+      expect(screen.queryByTestId('join-date-info')).not.toBeInTheDocument();
+    });
+
+    it('should not display join date when createdAt is invalid', () => {
+      const userWithInvalidDate: User = {
+        ...mockUser,
+        createdAt: 'not-a-date',
+      };
+      render(
+        <ProfileHeader user={userWithInvalidDate} socialStats={mockSocialStats} />
+      );
+      expect(screen.queryByTestId('join-date-info')).not.toBeInTheDocument();
     });
   });
 

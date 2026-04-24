@@ -2,6 +2,7 @@
 
 import { User as UserIcon, MapPin, Calendar, Link as LinkIcon, Settings } from 'lucide-react';
 import React from 'react';
+import { formatJoinedDate } from '../../lib/utils';
 
 export interface User {
   wallet: string;
@@ -9,6 +10,7 @@ export interface User {
   handle?: string;
   bio?: string;
   avatar?: string;
+  createdAt?: string | Date;
 }
 
 export interface SocialStats {
@@ -31,6 +33,7 @@ export function ProfileHeader({
 }: ProfileHeaderProps) {
   const displayName = user.displayName || user.wallet.slice(0, 6);
   const chainName = currentChain === 'stellar' ? 'Stellar' : 'Base Sepolia';
+  const joinedDateLabel = formatJoinedDate(user.createdAt);
 
   return (
     <div className="w-full">
@@ -97,13 +100,15 @@ export function ProfileHeader({
                 backit.xyz
               </a>
             </div>
-            <div
-              className="flex items-center gap-1"
-              data-testid="join-date-info"
-            >
-              <Calendar className="h-3 w-3" />
-              Joined Nov 2025
-            </div>
+            {joinedDateLabel && (
+              <div
+                className="flex items-center gap-1"
+                data-testid="join-date-info"
+              >
+                <Calendar className="h-3 w-3" />
+                {joinedDateLabel}
+              </div>
+            )}
           </div>
 
           {/* Follow Stats */}
