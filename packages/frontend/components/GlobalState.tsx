@@ -16,6 +16,12 @@ import {
 import { useSocket, type SocketCallEvent } from '../hooks/useSocket';
 import { type Call, type User } from '../lib/types';
 
+type StakingStep =
+  | "idle"
+  | "approving"
+  | "approved"
+  | "staking"
+  | "confirmed";
 
 interface GlobalStateContextType {
   calls: Call[];
@@ -23,6 +29,7 @@ interface GlobalStateContextType {
   stakeOnCall: (callId: string, amount: number, type: 'back' | 'challenge') => Promise<void>;
   currentUser: User | null;
   isLoading: boolean;
+  stakingStep: StakingStep;
   login: () => Promise<void>;
   setPendingReferrerWallet: (referrerWallet: string | null) => void;
   updateProfile: (data: { handle: string; bio: string }) => Promise<void>;
@@ -65,6 +72,7 @@ const getErrorMessage = (error: unknown): string => {
 export function GlobalStateProvider({ children }: { children: React.ReactNode }) {
   const [calls, setCalls] = useState<Call[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [stakingStep, setStakingStep] = useState<StakingStep>("idle");
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [newCallsBanner, setNewCallsBanner] = useState(false);
   const [pendingReferrerWallet, setPendingReferrerWallet] = useState<
@@ -123,11 +131,11 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
         prev.map((c) =>
           c.id === (data.callOnchainId ?? data.id)
             ? {
-                ...c,
-                totalStakeYes: Number(data.totalStakeYes ?? c.totalStakeYes),
-                totalStakeNo: Number(data.totalStakeNo ?? c.totalStakeNo),
-                backers: (c.backers || 0) + 1,
-              }
+              ...c,
+              totalStakeYes: Number(data.totalStakeYes ?? c.totalStakeYes),
+              totalStakeNo: Number(data.totalStakeNo ?? c.totalStakeNo),
+              backers: (c.backers || 0) + 1,
+            }
             : c,
         ),
       );
@@ -242,6 +250,8 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
     confirmedTitle: string;
     failedTitle: string;
     write: () => Promise<Hash>;
+    onStart?: () => void;
+    onConfirmed?: () => void;
   }): Promise<Hash> => {
     let txHash: Hash | undefined;
     try {
@@ -249,7 +259,10 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
         throw new Error("Unable to access chain client. Please reconnect wallet.");
       }
 
+      params.onStart?.(); // ✅ NEW
+
       txHash = await params.write();
+
       showTxSubmittedToast({
         title: params.submittedTitle,
         description: "Waiting for onchain confirmation.",
@@ -261,6 +274,8 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
       if (receipt.status !== "success") {
         throw new Error("Transaction was mined but reverted.");
       }
+
+      params.onConfirmed?.(); // ✅ NEW
 
       showTxConfirmedToast({
         title: params.confirmedTitle,
@@ -379,8 +394,14 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
     }
   };
 
-  const stakeOnCall = async (callId: string, amount: number, type: "back" | "challenge") => {
+  const stakeOnCall = async (
+    callId: string,
+    amount: number,
+    type: "back" | "challenge"
+  ) => {
     setIsLoading(true);
+    setStakingStep("idle");
+
     try {
       if (selectedChain === 'stellar') {
         showInfoToast({ title: "Coming soon", description: "Stellar staking is not implemented yet." });
@@ -391,10 +412,13 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
       const tokenAddress = process.env.NEXT_PUBLIC_MOCK_TOKEN_ADDRESS as `0x${string}`;
       const registryAddress = process.env.NEXT_PUBLIC_CALL_REGISTRY_ADDRESS as `0x${string}`;
 
+      // STEP 1: APPROVE
       await trackEvmTransaction({
         submittedTitle: "Tx Submitted: Token approval",
         confirmedTitle: "Tx Confirmed: Token approval",
         failedTitle: "Tx Failed: Token approval",
+        onStart: () => setStakingStep("approving"),
+        onConfirmed: () => setStakingStep("approved"),
         write: () =>
           writeContractAsync({
             address: tokenAddress,
@@ -404,11 +428,15 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
           }),
       });
 
+      // STEP 2: STAKE
       const position = type === "back";
+
       await trackEvmTransaction({
         submittedTitle: "Tx Submitted: Stake on call",
         confirmedTitle: "Tx Confirmed: Stake on call",
         failedTitle: "Tx Failed: Stake on call",
+        onStart: () => setStakingStep("staking"),
+        onConfirmed: () => setStakingStep("confirmed"),
         write: () =>
           writeContractAsync({
             address: registryAddress,
@@ -418,11 +446,14 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
           }),
       });
 
+      // Optimistic UI update (unchanged)
       setCalls((prev) =>
         prev.map((call) => {
           if (call.id === callId) {
-            const currentVolume = parseFloat(String(call.volume || "").replace(/[^0-9.-]+/g, "")) || 0;
+            const currentVolume =
+              parseFloat(String(call.volume || "").replace(/[^0-9.-]+/g, "")) || 0;
             const newVolume = currentVolume + amount;
+
             return {
               ...call,
               backers: (call.backers || 0) + 1,
@@ -434,6 +465,7 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
       );
     } catch (error) {
       console.error("Failed to stake:", error);
+      setStakingStep("idle"); // reset on error
     } finally {
       setIsLoading(false);
     }
@@ -447,6 +479,7 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
         stakeOnCall,
         currentUser,
         isLoading,
+        stakingStep,
         login,
         setPendingReferrerWallet,
         updateProfile,
