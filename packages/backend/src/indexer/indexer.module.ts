@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { IndexerService } from './indexer.service';
 import { IndexerController } from './indexer.controller';
 import { Call } from '../calls/call.entity';
+import { StakeActivity } from '../calls/stake-activity.entity';
 import { PlatformSettings } from './platform-settings.entity';
 import { AuthModule } from '../auth/auth.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -12,7 +13,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
   imports: [
     ConfigModule,
     AuthModule,
-    TypeOrmModule.forFeature([Call, PlatformSettings]),
+    TypeOrmModule.forFeature([Call, StakeActivity, PlatformSettings]),
     NotificationsModule,
   ],
   providers: [IndexerService],

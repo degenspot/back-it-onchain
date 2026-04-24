@@ -85,7 +85,7 @@ export class EventsGateway
     }
 
     this.logger.log(
-      `Client connected: ${client.id} | total: ${this.server.sockets.sockets.size}`,
+      `Client connected: ${client.id}`,
     );
   }
 
