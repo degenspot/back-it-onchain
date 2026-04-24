@@ -30,6 +30,7 @@ import { UserBadge } from './badges/badge.entity';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { UploadsModule } from './uploads/uploads.module';
 import { GatewaysModule } from './gateways/gateways.module';
+import { AdminModule } from './admin/admin.module';
 
 @Module({
   imports: [
@@ -102,6 +103,7 @@ import { GatewaysModule } from './gateways/gateways.module';
     AnalyticsModule,
     UploadsModule,
     GatewaysModule,
+    AdminModule,
   ],
   controllers: [AppController],
   providers: [

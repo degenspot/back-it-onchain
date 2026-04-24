@@ -8,18 +8,28 @@ import {
   Request,
   HttpException,
   HttpStatus,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { CallsService } from './calls.service';
 import { Call } from './call.entity';
+import { AdminService } from '../admin/admin.service';
 
 @Controller('calls')
 export class CallsController {
-  constructor(private readonly callsService: CallsService) {}
+  constructor(
+    private readonly callsService: CallsService,
+    private readonly adminService: AdminService,
+  ) {}
 
   @Throttle({ short: { limit: 5, ttl: 1 * 60000 } })
   @Post()
   create(@Body() createCallDto: Partial<Call>) {
+    if (this.adminService.isPaused()) {
+      throw new ServiceUnavailableException(
+        'Protocol is paused. New call creation is disabled.',
+      );
+    }
     return this.callsService.create(createCallDto);
   }
 

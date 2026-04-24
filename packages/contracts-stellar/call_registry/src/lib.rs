@@ -3,6 +3,12 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, token, Address, BytesN, Env, String, Symbol, Vec,
 };
 
+// ── TTL constants (issue #169) ────────────────────────────────────────────────
+/// Approximate ledger count for 1 year (≈ 6 s per ledger, 365.25 days).
+const LEDGERS_PER_YEAR: u32 = 5_259_600;
+/// Re-extend TTL if it falls below 30 days of remaining ledgers.
+const TTL_THRESHOLD: u32 = 432_000; // ~30 days
+
 // ── Vault interface (mock / Phoenix-compatible) ───────────────────────────────
 // Any Soroban lending vault that exposes deposit/withdraw is compatible.
 mod vault {
@@ -47,6 +53,17 @@ pub struct CreateCallMetadata {
     pub ipfs_cid: String,
 }
 
+// ── Token whitelisting types (issue #170) ─────────────────────────────────────
+
+/// Tracks a pending token-whitelist proposal with up to 3 staker vouches.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenProposal {
+    pub proposer: Address,
+    /// Addresses of authorized stakers who have vouched for this token.
+    pub vouches: Vec<Address>,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
@@ -59,6 +76,13 @@ pub enum DataKey {
     VaultContract,
     /// Accumulated platform fees available for dividend distribution.
     PlatformFees,
+    // ── Token whitelist (issue #170) ─────────────────────────────────────────
+    /// Whether a given token is whitelisted as a stake_token.
+    WhitelistedToken(Address),
+    /// Pending proposal for a token, keyed by token address.
+    TokenProposal(Address),
+    /// Whether an address is an authorized staker (can vouch for tokens).
+    AuthorizedStaker(Address),
 }
 
 // ── Surge-fee helper ──────────────────────────────────────────────────────────
@@ -87,6 +111,17 @@ pub fn compute_fee_basis_points(participant_count: u32) -> i128 {
     }
 }
 
+// ── TTL helper (issue #169) ───────────────────────────────────────────────────
+
+/// Extend a persistent-storage key's TTL to 1 year if it falls below the
+/// 30-day threshold.  Call this on every meaningful write to ensure data
+/// is retained for 1 year from the most-recent interaction.
+fn bump_persistent_ttl(env: &Env, key: &DataKey) {
+    env.storage()
+        .persistent()
+        .extend_ttl(key, TTL_THRESHOLD, LEDGERS_PER_YEAR);
+}
+
 // ── Contract ──────────────────────────────────────────────────────────────────
 
 #[contract]
@@ -112,6 +147,26 @@ impl CallRegistry {
         if Self::is_paused(env) {
             panic!("Contract is paused");
         }
+    }
+
+    // ── Token whitelist helpers (issue #170) ──────────────────────────────────
+
+    fn assert_token_whitelisted(env: &Env, token: &Address) {
+        let whitelisted: bool = env
+            .storage()
+            .persistent()
+            .get(&DataKey::WhitelistedToken(token.clone()))
+            .unwrap_or(false);
+        if !whitelisted {
+            panic!("Token not whitelisted");
+        }
+    }
+
+    fn is_authorized_staker_internal(env: &Env, staker: &Address) -> bool {
+        env.storage()
+            .persistent()
+            .get(&DataKey::AuthorizedStaker(staker.clone()))
+            .unwrap_or(false)
     }
 
     // ── Vault helpers ─────────────────────────────────────────────────────────
@@ -181,6 +236,154 @@ impl CallRegistry {
         Self::is_paused(&env)
     }
 
+    // ── Authorized staker management (issue #170) ─────────────────────────────
+
+    /// Grant a staker authorization to vouch for token proposals (admin only).
+    pub fn add_authorized_staker(env: Env, staker: Address) {
+        let admin = Self::get_admin(&env);
+        admin.require_auth();
+        env.storage()
+            .persistent()
+            .set(&DataKey::AuthorizedStaker(staker.clone()), &true);
+        env.events()
+            .publish((Symbol::new(&env, "StakerAuthorized"), staker), ());
+    }
+
+    /// Revoke an authorized staker (admin only).
+    pub fn remove_authorized_staker(env: Env, staker: Address) {
+        let admin = Self::get_admin(&env);
+        admin.require_auth();
+        env.storage()
+            .persistent()
+            .remove(&DataKey::AuthorizedStaker(staker.clone()));
+        env.events()
+            .publish((Symbol::new(&env, "StakerRevoked"), staker), ());
+    }
+
+    /// Admin shortcut: directly whitelist a token without the proposal process.
+    pub fn whitelist_token_admin(env: Env, token: Address) {
+        let admin = Self::get_admin(&env);
+        admin.require_auth();
+        env.storage()
+            .persistent()
+            .set(&DataKey::WhitelistedToken(token.clone()), &true);
+        // Clean up any pending proposal for this token.
+        env.storage()
+            .persistent()
+            .remove(&DataKey::TokenProposal(token.clone()));
+        env.events()
+            .publish((Symbol::new(&env, "TokenWhitelisted"), token), ());
+    }
+
+    /// Admin can revoke a previously whitelisted token.
+    pub fn remove_whitelisted_token(env: Env, token: Address) {
+        let admin = Self::get_admin(&env);
+        admin.require_auth();
+        env.storage()
+            .persistent()
+            .remove(&DataKey::WhitelistedToken(token.clone()));
+        env.events()
+            .publish((Symbol::new(&env, "TokenDelisted"), token), ());
+    }
+
+    // ── Decentralized token whitelisting (issue #170) ─────────────────────────
+
+    /// Any user may propose a token to be used as a stake_token.
+    /// If the token is already whitelisted or has an existing proposal, this is a no-op.
+    pub fn propose_token(env: Env, proposer: Address, token: Address) {
+        proposer.require_auth();
+
+        // Already whitelisted – nothing to do.
+        if env
+            .storage()
+            .persistent()
+            .get::<DataKey, bool>(&DataKey::WhitelistedToken(token.clone()))
+            .unwrap_or(false)
+        {
+            return;
+        }
+
+        // Existing proposal – let it proceed through vouching.
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::TokenProposal(token.clone()))
+        {
+            return;
+        }
+
+        let proposal = TokenProposal {
+            proposer: proposer.clone(),
+            vouches: Vec::new(&env),
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::TokenProposal(token.clone()), &proposal);
+
+        env.events()
+            .publish((Symbol::new(&env, "TokenProposed"), token), proposer);
+    }
+
+    /// An authorized staker vouches for a pending token proposal.
+    /// After 3 distinct vouches the token is automatically whitelisted.
+    pub fn vouch_for_token(env: Env, voucher: Address, token: Address) {
+        voucher.require_auth();
+
+        if !Self::is_authorized_staker_internal(&env, &voucher) {
+            panic!("Not an authorized staker");
+        }
+
+        let key = DataKey::TokenProposal(token.clone());
+        let mut proposal: TokenProposal = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .expect("No proposal for token");
+
+        // Idempotent: ignore duplicate vouches from the same staker.
+        for i in 0..proposal.vouches.len() {
+            if proposal.vouches.get(i).unwrap() == voucher {
+                return;
+            }
+        }
+
+        proposal.vouches.push_back(voucher.clone());
+        env.events()
+            .publish((Symbol::new(&env, "TokenVouched"), token.clone()), voucher);
+
+        // Three vouches → automatically whitelist.
+        if proposal.vouches.len() >= 3 {
+            env.storage()
+                .persistent()
+                .set(&DataKey::WhitelistedToken(token.clone()), &true);
+            env.storage().persistent().remove(&key);
+            env.events()
+                .publish((Symbol::new(&env, "TokenWhitelisted"), token), ());
+        } else {
+            env.storage().persistent().set(&key, &proposal);
+        }
+    }
+
+    // ── Token whitelist getters ───────────────────────────────────────────────
+
+    pub fn is_token_whitelisted(env: Env, token: Address) -> bool {
+        env.storage()
+            .persistent()
+            .get(&DataKey::WhitelistedToken(token))
+            .unwrap_or(false)
+    }
+
+    pub fn get_token_proposal(env: Env, token: Address) -> TokenProposal {
+        env.storage()
+            .persistent()
+            .get(&DataKey::TokenProposal(token))
+            .expect("No proposal found")
+    }
+
+    pub fn is_authorized_staker(env: Env, staker: Address) -> bool {
+        Self::is_authorized_staker_internal(&env, &staker)
+    }
+
     // ── Core call lifecycle ───────────────────────────────────────────────────
 
     /// Create a new prediction call.
@@ -194,6 +397,8 @@ impl CallRegistry {
         metadata: CreateCallMetadata,
     ) -> u64 {
         Self::assert_not_paused(&env);
+        // Enforce token whitelist (issue #170)
+        Self::assert_token_whitelisted(&env, &stake_token);
         creator.require_auth();
 
         if end_ts <= env.ledger().timestamp() {
@@ -242,10 +447,15 @@ impl CallRegistry {
             .persistent()
             .set(&DataKey::Call(call_id), &call);
 
-        env.storage().persistent().set(
-            &DataKey::UserStake(call_id, creator.clone(), true),
-            &stake_amount,
-        );
+        // Bump TTL for 1 year on creation (issue #169)
+        let call_key = DataKey::Call(call_id);
+        bump_persistent_ttl(&env, &call_key);
+
+        let creator_stake_key = DataKey::UserStake(call_id, creator.clone(), true);
+        env.storage()
+            .persistent()
+            .set(&creator_stake_key, &stake_amount);
+        bump_persistent_ttl(&env, &creator_stake_key);
 
         env.events().publish(
             (Symbol::new(&env, "CallCreated"), call_id, creator),
@@ -320,12 +530,15 @@ impl CallRegistry {
         call.vault_balance += net_amount;
         call.participant_count += 1;
         env.storage().persistent().set(&key, &call);
+        // Bump TTL on every stake interaction (issue #169)
+        bump_persistent_ttl(&env, &key);
 
         let stake_key = DataKey::UserStake(call_id, staker.clone(), position);
         let current_stake: i128 = env.storage().persistent().get(&stake_key).unwrap_or(0);
         env.storage()
             .persistent()
             .set(&stake_key, &(current_stake + net_amount));
+        bump_persistent_ttl(&env, &stake_key);
 
         env.events().publish(
             (Symbol::new(&env, "StakeAdded"), call_id, staker),
@@ -382,8 +595,8 @@ impl CallRegistry {
         call.vault_balance -= payout;
         env.storage().persistent().set(&key, &call);
 
-        // Clear user stake
-        env.storage().persistent().set(&stake_key, &0i128);
+        // Remove the fulfilled stake entry to reclaim state rent (issue #169)
+        env.storage().persistent().remove(&stake_key);
 
         let token_client = token::Client::new(&env, &call.stake_token);
         token_client.transfer(&env.current_contract_address(), &user, &payout);
@@ -392,6 +605,29 @@ impl CallRegistry {
             (Symbol::new(&env, "PayoutWithdrawn"), call_id, user),
             payout,
         );
+    }
+
+    // ── Storage archival (issue #169) ─────────────────────────────────────────
+
+    /// Explicitly remove a fully-settled call's storage entry to reclaim state rent.
+    /// Anyone may call this once the call is settled; the TTL will expire naturally
+    /// after one year, but this allows immediate cleanup.
+    pub fn archive_call(env: Env, call_id: u64) {
+        let key = DataKey::Call(call_id);
+        let call: Call = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .expect("Call does not exist");
+
+        if !call.settled {
+            panic!("Call not yet settled");
+        }
+
+        env.storage().persistent().remove(&key);
+
+        env.events()
+            .publish((Symbol::new(&env, "CallArchived"), call_id), ());
     }
 
     // ── Dividend distribution (issue #160) ────────────────────────────────────
