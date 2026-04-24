@@ -22,6 +22,21 @@ export default function CallDetailPage() {
 
     const call = calls.find(c => c.id === id);
 
+    const stepLabels: Record<string, string> = {
+  idle: "",
+  approving: "Step 1/2: Approving token…",
+  approved: "Step 1/2: Approval confirmed",
+  staking: "Step 2/2: Staking…",
+  confirmed: "Step 2/2: Confirmed",
+};
+
+const stepProgress: Record<string, number> = {
+  idle: 0,
+  approving: 25,
+  approved: 50,
+  staking: 75,
+  confirmed: 100,
+};
     // Simulate initial data fetching
     useEffect(() => {
         if (calls.length > 0) {
@@ -34,21 +49,6 @@ export default function CallDetailPage() {
     }, [calls]);
 
     if (isFetching) {
-        const stepLabels: Record<string, string> = {
-            idle: "",
-            approving: "Step 1/2: Approving token…",
-            approved: "Step 1/2: Approval confirmed",
-            staking: "Step 2/2: Staking…",
-            confirmed: "Step 2/2: Confirmed",
-        };
-
-        const stepProgress: Record<string, number> = {
-            idle: 0,
-            approving: 25,
-            approved: 50,
-            staking: 75,
-            confirmed: 100,
-        };
         return (
             <AppLayout rightSidebar={<MarketDetailRightSidebarSkeleton />}>
                 <MarketDetailSkeleton />
@@ -68,7 +68,7 @@ export default function CallDetailPage() {
     }
 
     // Parse stake amount for calculations
-    const stakeAmount = parseFloat(String(call.stake || "").split(" ")[0]) || 0;
+    // const stakeAmount = parseFloat(String(call.stake || "").split(" ")[0]) || 0;
     const startPrice = 0.12; // Mock start price
     const targetPrice = parseFloat(String(call.target || "").replace(/[^0-9.]/g, "")) || startPrice * 1.25;
 
@@ -131,7 +131,7 @@ export default function CallDetailPage() {
     return (
         <AppLayout rightSidebar={RightSidebar}>
             {isLoading && stakingStep !== "idle" && (
-                <Loader text={stepLabels[stakingStep] || "Processing transaction..."} />
+                <Loader text={stepLabels[stakingStep as keyof typeof stepLabels] || "Processing transaction..."} />
             )}
 
             {/* Header */}
@@ -228,7 +228,7 @@ export default function CallDetailPage() {
                                     <div className="w-full bg-secondary rounded-full h-2 overflow-hidden">
                                         <div
                                             className="h-full bg-primary transition-all duration-500"
-                                            style={{ width: `${stepProgress[stakingStep]}%` }}
+                                            style={{ width: `${stepProgress[stakingStep as keyof typeof stepProgress]}%` }}
                                         />
                                     </div>
                                 </div>
