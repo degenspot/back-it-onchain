@@ -34,6 +34,7 @@ fn test_create_call() {
     let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
 
     stake_token_admin_client.mint(&creator, &1000);
+    client.whitelist_token_admin(&stake_token);
 
     let end_ts = env.ledger().timestamp() + 1000;
     let call_id = client.create_call(
@@ -82,6 +83,7 @@ fn test_stake_on_call() {
 
     stake_token_admin_client.mint(&creator, &1000);
     stake_token_admin_client.mint(&staker, &1000);
+    client.whitelist_token_admin(&stake_token);
 
     let end_ts = env.ledger().timestamp() + 1000;
     let call_id = client.create_call(
@@ -111,7 +113,10 @@ fn test_create_call_past_end_time() {
     let admin = Address::generate(&env);
     client.initialize(&admin);
     let creator = Address::generate(&env);
-    let stake_token = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    client.whitelist_token_admin(&stake_token);
     client.create_call(
         &creator,
         &stake_token,
@@ -139,6 +144,7 @@ fn test_stake_ended_call() {
     let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
     stake_token_admin_client.mint(&creator, &1000);
     stake_token_admin_client.mint(&staker, &1000);
+    client.whitelist_token_admin(&stake_token);
 
     let end_ts = env.ledger().timestamp() + 100;
     let call_id = client.create_call(
@@ -192,6 +198,7 @@ fn test_pause_unpause_flow() {
     let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
     stake_token_admin_client.mint(&creator, &1000);
     stake_token_admin_client.mint(&staker, &1000);
+    client.whitelist_token_admin(&stake_token);
 
     let end_ts = env.ledger().timestamp() + 1000;
     let call_id = client.create_call(
@@ -316,6 +323,7 @@ fn test_stake_applies_surge_fee() {
     let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
     stake_token_admin_client.mint(&creator, &10_000);
     stake_token_admin_client.mint(&staker, &10_000);
+    client.whitelist_token_admin(&stake_token);
 
     let end_ts = env.ledger().timestamp() + 1000;
     let call_id = client.create_call(
@@ -353,6 +361,7 @@ fn test_get_fee_basis_points() {
     let stake_token = stake_token_contract.address();
     let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
     stake_token_admin_client.mint(&creator, &1000);
+    client.whitelist_token_admin(&stake_token);
 
     let end_ts = env.ledger().timestamp() + 1000;
     let call_id = client.create_call(
@@ -387,6 +396,7 @@ fn test_distribute_dividends() {
     let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
     stake_token_admin_client.mint(&creator, &10_000);
     stake_token_admin_client.mint(&staker, &10_000);
+    client.whitelist_token_admin(&stake_token);
 
     let end_ts = env.ledger().timestamp() + 1000;
     let call_id = client.create_call(
@@ -431,4 +441,198 @@ fn test_distribute_dividends_no_fees() {
     let holder = Address::generate(&env);
     let stakers = vec![&env, (holder.clone(), 1i128)];
     client.distribute_dividends(&stake_token, &stakers);
+}
+
+// ── Issue #170: Decentralized Token Whitelisting ──────────────────────────────
+
+#[test]
+fn test_propose_and_vouch_whitelist() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let staker1 = Address::generate(&env);
+    let staker2 = Address::generate(&env);
+    let staker3 = Address::generate(&env);
+    client.add_authorized_staker(&staker1);
+    client.add_authorized_staker(&staker2);
+    client.add_authorized_staker(&staker3);
+
+    let token = Address::generate(&env);
+    let proposer = Address::generate(&env);
+
+    // Token not yet whitelisted
+    assert!(!client.is_token_whitelisted(&token));
+
+    client.propose_token(&proposer, &token);
+
+    // Two vouches — not yet whitelisted
+    client.vouch_for_token(&staker1, &token);
+    assert!(!client.is_token_whitelisted(&token));
+    client.vouch_for_token(&staker2, &token);
+    assert!(!client.is_token_whitelisted(&token));
+
+    // Third vouch → auto-whitelisted
+    client.vouch_for_token(&staker3, &token);
+    assert!(client.is_token_whitelisted(&token));
+}
+
+#[test]
+fn test_duplicate_vouch_ignored() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let staker = Address::generate(&env);
+    client.add_authorized_staker(&staker);
+
+    let token = Address::generate(&env);
+    let proposer = Address::generate(&env);
+    client.propose_token(&proposer, &token);
+
+    // Same staker vouches twice — only one counted
+    client.vouch_for_token(&staker, &token);
+    client.vouch_for_token(&staker, &token);
+
+    // Still only 1 vouch, not whitelisted
+    assert!(!client.is_token_whitelisted(&token));
+    let proposal = client.get_token_proposal(&token);
+    assert_eq!(proposal.vouches.len(), 1);
+}
+
+#[test]
+#[should_panic(expected = "Not an authorized staker")]
+fn test_vouch_requires_authorized_staker() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let token = Address::generate(&env);
+    let proposer = Address::generate(&env);
+    client.propose_token(&proposer, &token);
+
+    let random = Address::generate(&env);
+    client.vouch_for_token(&random, &token);
+}
+
+#[test]
+fn test_admin_whitelist_bypass() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let token = Address::generate(&env);
+    assert!(!client.is_token_whitelisted(&token));
+    client.whitelist_token_admin(&token);
+    assert!(client.is_token_whitelisted(&token));
+    client.remove_whitelisted_token(&token);
+    assert!(!client.is_token_whitelisted(&token));
+}
+
+#[test]
+#[should_panic(expected = "Token not whitelisted")]
+fn test_create_call_rejects_non_whitelisted_token() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+    stake_token_admin_client.mint(&creator, &1000);
+
+    // No whitelist call — should panic
+    client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &(env.ledger().timestamp() + 1000),
+        &default_metadata(&env),
+    );
+}
+
+// ── Issue #169: Storage TTL & Archival ───────────────────────────────────────
+
+#[test]
+fn test_archive_settled_call() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+    stake_token_admin_client.mint(&creator, &1000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 100;
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &default_metadata(&env),
+    );
+
+    // Advance time and finalize
+    env.ledger().set_timestamp(end_ts + 1);
+    client.finalize_call(&call_id, &true, &1000i128, &creator);
+
+    let call = client.get_call(&call_id);
+    assert!(call.settled);
+
+    // Archive should succeed
+    client.archive_call(&call_id);
+}
+
+#[test]
+#[should_panic(expected = "Call not yet settled")]
+fn test_archive_unsettled_call_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+    stake_token_admin_client.mint(&creator, &1000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 100;
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &default_metadata(&env),
+    );
+
+    client.archive_call(&call_id);
 }

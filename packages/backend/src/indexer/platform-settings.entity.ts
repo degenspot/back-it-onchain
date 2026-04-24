@@ -13,6 +13,9 @@ export class PlatformSettings {
   @Column({ type: 'float', default: 0 })
   feePercent: number;
 
+  @Column({ type: 'boolean', default: false })
+  isPaused: boolean;
+
   @UpdateDateColumn()
   updatedAt: Date;
 }

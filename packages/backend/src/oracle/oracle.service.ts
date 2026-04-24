@@ -1,7 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ethers } from 'ethers';
 import { Keypair } from '@stellar/stellar-sdk';
+import { AdminService } from '../admin/admin.service';
 
 // ─── Retry configuration ────────────────────────────────────────────────────
 
@@ -148,7 +149,10 @@ export class OracleService {
   private signer: ethers.Wallet;
   private stellarKeypair: Keypair;
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private configService: ConfigService,
+    private adminService: AdminService,
+  ) {
     const privateKey = this.configService.get<string>('ORACLE_PRIVATE_KEY');
     if (privateKey) {
       this.signer = new ethers.Wallet(privateKey);
@@ -255,6 +259,11 @@ export class OracleService {
     finalPrice: number,
     timestamp: number,
   ): Promise<string> {
+    if (this.adminService.isPaused()) {
+      throw new ServiceUnavailableException(
+        'Protocol is paused. Oracle signatures are disabled.',
+      );
+    }
     if (!this.signer) throw new Error('Oracle signer not configured');
 
     const domain = {
@@ -299,6 +308,11 @@ export class OracleService {
     finalPrice: number,
     timestamp: number,
   ): Buffer {
+    if (this.adminService.isPaused()) {
+      throw new ServiceUnavailableException(
+        'Protocol is paused. Oracle signatures are disabled.',
+      );
+    }
     if (!this.stellarKeypair) {
       throw new Error('Stellar keypair not configured');
     }
