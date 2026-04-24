@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { AppLayout } from "@/components/AppLayout";
 import { TrendingUp, Award, Wallet } from 'lucide-react';
 import { useGlobalState } from "@/components/GlobalState";
@@ -20,58 +21,6 @@ interface Stake {
     payout?: number;
     result?: 'won' | 'lost';
 }
-
-// Placeholder stakes data
-const PLACEHOLDER_STAKES: Stake[] = [
-    {
-        id: '1',
-        title: 'ETH will reach $4000 by Feb 28',
-        choice: 'yes',
-        amount: 150,
-        chain: 'base',
-        timeLeft: '1d 5h',
-        status: 'active'
-    },
-    {
-        id: '2',
-        title: 'BTC will be above $65k',
-        choice: 'no',
-        amount: 250,
-        chain: 'base',
-        timeLeft: '7d 2h',
-        status: 'active'
-    },
-    {
-        id: '3',
-        title: 'Solana will outperform Ethereum',
-        choice: 'yes',
-        amount: 100,
-        payout: 180,
-        result: 'won',
-        chain: 'stellar',
-        status: 'settled'
-    },
-    {
-        id: '4',
-        title: 'XRP will reach $5 this month',
-        choice: 'no',
-        amount: 200,
-        payout: 0,
-        result: 'lost',
-        chain: 'base',
-        status: 'settled'
-    },
-    {
-        id: '5',
-        title: 'Polygon will reach $1.5',
-        choice: 'yes',
-        amount: 75,
-        payout: 112.5,
-        result: 'won',
-        chain: 'stellar',
-        status: 'claimable'
-    },
-];
 
 function getTimeRemaining(endTs: string | number): string {
     try {
@@ -97,7 +46,7 @@ function getTimeRemaining(endTs: string | number): string {
 export default function PortfolioPage() {
     const { currentUser } = useGlobalState();
     const [activeTab, setActiveTab] = useState<'active' | 'past' | 'claimable'>('active');
-    const [stakes, setStakes] = useState<Stake[]>(PLACEHOLDER_STAKES);
+    const [stakes, setStakes] = useState<Stake[]>([]);
     const [isLoading, setIsLoading] = useState(true);
 
     // Fetch user's stakes from backend
@@ -126,14 +75,14 @@ export default function PortfolioPage() {
                     }));
                     setStakes(processedStakes);
                 } else {
-                    // Fallback to placeholder if endpoint not available
-                    console.log('Stakes endpoint not available, using placeholder data');
-                    setStakes(PLACEHOLDER_STAKES);
+                    // Fallback to empty if endpoint not available
+                    console.log('Stakes endpoint not available, using empty data');
+                    setStakes([]);
                 }
             } catch (error) {
                 console.error('Failed to fetch stakes:', error);
-                // Use placeholder data on error
-                setStakes(PLACEHOLDER_STAKES);
+                // Use empty data on error
+                setStakes([]);
             } finally {
                 setIsLoading(false);
             }
@@ -313,12 +262,15 @@ export default function PortfolioPage() {
                             <StakeItem key={stake.id} stake={stake} />
                         ))
                     ) : (
-                        <div className="text-center py-12">
+                        <div className="text-center py-12 flex flex-col items-center justify-center">
                             <p className="text-muted-foreground mb-4">
-                                {activeTab === 'active' && 'No active stakes yet'}
-                                {activeTab === 'past' && 'No past stakes yet'}
-                                {activeTab === 'claimable' && 'No claimable payouts yet'}
+                                {activeTab === 'active' && 'No active stakes yet.'}
+                                {activeTab === 'past' && 'No past stakes yet.'}
+                                {activeTab === 'claimable' && 'No claimable payouts yet.'}
                             </p>
+                            <Link href="/explore" className="bg-primary text-white px-6 py-2 rounded-xl font-bold hover:bg-primary/90 transition-colors">
+                                Explore Markets
+                            </Link>
                         </div>
                     )}
                 </div>
