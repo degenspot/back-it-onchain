@@ -7,6 +7,7 @@ export interface User {
   referredBy?: string;
   avatar?: string; // Legacy UI
   isFollowing?: boolean;
+  createdAt?: string;
 }
 
 export interface Call {
