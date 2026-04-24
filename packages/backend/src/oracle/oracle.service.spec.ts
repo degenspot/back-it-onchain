@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { OracleService } from './oracle.service';
 import { Keypair } from '@stellar/stellar-sdk';
+import { AdminService } from '../admin/admin.service';
 
 describe('OracleService', () => {
   let service: OracleService;
@@ -31,6 +32,12 @@ describe('OracleService', () => {
               }
               return null;
             }),
+          },
+        },
+        {
+          provide: AdminService,
+          useValue: {
+            isPaused: jest.fn(() => false),
           },
         },
       ],
@@ -169,6 +176,12 @@ describe('OracleService', () => {
             provide: ConfigService,
             useValue: {
               get: jest.fn(() => null),
+            },
+          },
+          {
+            provide: AdminService,
+            useValue: {
+              isPaused: jest.fn(() => false),
             },
           },
         ],
