@@ -14,6 +14,24 @@ const API_BASE_URL = (
     process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:3001"
 ).replace(/\/+$/, "");
 
+// Converts a 0–100 score into a human-readable label. Returns null for low scores.
+function getPercentileLabel(score: number): string | null {
+    if (score >= 95) return "Top 5% of predictors";
+    if (score >= 80) return "Top 20% of predictors";
+    if (score >= 60) return "Top 40% of predictors";
+    return null;
+}
+
+// Shown while the reputation score request is in flight
+function ReputationSkeleton() {
+    return (
+        <div className="animate-pulse space-y-2 mt-1">
+            <div className="h-9 w-16 rounded-lg bg-secondary" />
+            <div className="h-4 w-40 rounded bg-secondary" />
+        </div>
+    );
+}
+
 export default function ProfilePage() {
     const { currentUser, calls } = useGlobalState();
     const { selectedChain } = useChain();
@@ -23,6 +41,11 @@ export default function ProfilePage() {
     const [isCopying, setIsCopying] = useState(false);
     const [isCopied, setIsCopied] = useState(false);
     const [origin, setOrigin] = useState("");
+
+    // ── NEW: reputation score state ──────────────────────────────────────────
+    const [reputationScore, setReputationScore] = useState<number | null>(null);
+    const [isLoadingReputation, setIsLoadingReputation] = useState(true);
+    // ─────────────────────────────────────────────────────────────────────────
 
     useEffect(() => {
         setOrigin(window.location.origin);
@@ -53,6 +76,32 @@ export default function ProfilePage() {
         fetchProfileStats();
     }, [currentUser]);
 
+    // ── NEW: fetch real reputationScore from GET /users/:wallet ──────────────
+    useEffect(() => {
+        if (!currentUser?.wallet) return;
+        let cancelled = false;
+
+        const fetchReputation = async () => {
+            setIsLoadingReputation(true);
+            try {
+                const encodedWallet = encodeURIComponent(currentUser.wallet);
+                const res = await fetch(`${API_BASE_URL}/users/${encodedWallet}`);
+                if (!res.ok) throw new Error("Failed to fetch user");
+                const user = await res.json();
+                if (!cancelled) setReputationScore(user.reputationScore ?? null);
+            } catch (error) {
+                console.error("Failed to fetch reputation score:", error);
+                // leaves reputationScore as null — UI shows "—" rather than wrong data
+            } finally {
+                if (!cancelled) setIsLoadingReputation(false);
+            }
+        };
+
+        fetchReputation();
+        return () => { cancelled = true; };
+    }, [currentUser]);
+    // ─────────────────────────────────────────────────────────────────────────
+
     if (!currentUser) {
         return (
             <AppLayout rightSidebar={null}>
@@ -80,14 +129,31 @@ export default function ProfilePage() {
         }
     };
 
+    // ── NEW: computed display values for the sidebar ─────────────────────────
+    const displayScore = reputationScore !== null ? `${reputationScore}%` : "—";
+    const percentileLabel = reputationScore !== null ? getPercentileLabel(reputationScore) : null;
+    // ─────────────────────────────────────────────────────────────────────────
+
     const RightSidebar = (
         <div className="space-y-6">
             <div className="bg-secondary/20 rounded-xl p-6 border border-border">
                 <h3 className="font-bold text-lg mb-2">Reputation Score</h3>
-                <div className="text-3xl font-bold text-primary mb-1">92%</div>
-                <p className="text-sm text-muted-foreground">
-                    Top 5% of predictors. Keep making accurate calls to increase your score.
-                </p>
+
+                {/* BEFORE: <div className="text-3xl font-bold text-primary mb-1">92%</div>          */}
+                {/* BEFORE: <p className="text-sm text-muted-foreground">Top 5% of predictors...</p> */}
+                {/* AFTER:                                                                            */}
+                {isLoadingReputation ? (
+                    <ReputationSkeleton />
+                ) : (
+                    <>
+                        <div className="text-3xl font-bold text-primary mb-1">{displayScore}</div>
+                        <p className="text-sm text-muted-foreground">
+                            {percentileLabel
+                                ? `${percentileLabel}. Keep making accurate calls to increase your score.`
+                                : "Keep making accurate calls to increase your score."}
+                        </p>
+                    </>
+                )}
             </div>
         </div>
     );
@@ -238,12 +304,3 @@ export default function ProfilePage() {
         </AppLayout>
     );
 }
-
-// function Badge({ icon, label }: { icon: React.ReactNode, label: string }) {
-//     return (
-//         <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-secondary/50 text-xs font-medium text-muted-foreground border border-border">
-//             {icon}
-//             {label}
-//         </div>
-//     );
-// }
