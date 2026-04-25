@@ -98,8 +98,11 @@ export default function PortfolioPage() {
                 const callsResponse = await fetch(`${API_BASE_URL}/calls`);
                 if (!callsResponse.ok) return;
 
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const calls = await callsResponse.json() as any[];
+                const payload = await callsResponse.json() as {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    data?: any[];
+                };
+                const calls = payload.data ?? [];
 
                 // Map calls by ID for quick lookup
                 const callsMap = new Map();

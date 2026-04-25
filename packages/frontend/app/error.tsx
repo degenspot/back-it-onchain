@@ -18,8 +18,8 @@ export default function AppError({ error, reset }: AppErrorProps) {
       <div className="w-full max-w-xl rounded-2xl border border-border bg-card p-8 text-center shadow-sm">
         <h1 className="text-2xl font-bold tracking-tight">Something went wrong</h1>
         <p className="mt-3 text-sm text-muted-foreground">
-          We&apos;re sorry, an unexpected error occurred. Please try again or
-          return to the home page.
+          We ran into an unexpected issue while loading this page. Try again, or
+          head back to the feed to keep exploring markets.
         </p>
 
         <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
@@ -31,10 +31,10 @@ export default function AppError({ error, reset }: AppErrorProps) {
             Try Again
           </button>
           <Link
-            href="/"
+            href="/feed"
             className="inline-flex items-center justify-center rounded-md border border-border px-4 py-2 text-sm font-medium transition-colors hover:bg-accent"
           >
-            Return Home
+            Return to Feed
           </Link>
         </div>
       </div>

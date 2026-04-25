@@ -133,7 +133,7 @@ export function CallCard({ call }: CallCardProps) {
               <div>
                 <div className="font-bold text-sm group-hover:text-primary transition-colors">
                   {call.creator?.displayName ||
-                    call.creator?.wallet?.slice(0, 6) ||
+                    call.creator?.wallet?.slice(0, 5) ||
                     "Unknown User"}
                 </div>
                 <div className="text-xs text-muted-foreground">

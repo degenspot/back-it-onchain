@@ -12,6 +12,8 @@ import { PriceChart } from "@/components/PriceChart";
 import { ActivityLog } from "@/components/ActivityLog";
 import { MarketDetailSkeleton } from "@/components/MarketDetailSkeleton";
 import { MarketDetailRightSidebarSkeleton } from "@/components/MarketDetailRightSidebarSkeleton";
+import * as Dialog from "@radix-ui/react-dialog";
+import { toast } from "sonner";
 
 export default function CallDetailPage() {
     const params = useParams();
@@ -19,6 +21,7 @@ export default function CallDetailPage() {
     const { calls, stakeOnCall, isLoading, stakingStep } = useGlobalState();
     const [stakingType, setStakingType] = useState<'back' | 'challenge' | null>(null);
     const [isFetching, setIsFetching] = useState(true);
+    const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
 
     const call = calls.find(c => c.id === id);
 
@@ -71,6 +74,26 @@ const stepProgress: Record<string, number> = {
     // const stakeAmount = parseFloat(String(call.stake || "").split(" ")[0]) || 0;
     const startPrice = 0.12; // Mock start price
     const targetPrice = parseFloat(String(call.target || "").replace(/[^0-9.]/g, "")) || startPrice * 1.25;
+    const shareTitle = String(call.title || call.conditionJson?.title || "Check out this market");
+
+    const handleCopyLink = async () => {
+        try {
+            await navigator.clipboard.writeText(window.location.href);
+            toast.success("Link copied to clipboard.");
+            setIsShareDialogOpen(false);
+        } catch (error) {
+            console.error("Failed to copy share link:", error);
+            toast.error("Couldn’t copy the link right now.");
+        }
+    };
+
+    const handleShareToX = () => {
+        const intentUrl = new URL("https://twitter.com/intent/tweet");
+        intentUrl.searchParams.set("text", `Check out this prediction: ${shareTitle}`);
+        intentUrl.searchParams.set("url", window.location.href);
+        window.open(intentUrl.toString(), "_blank", "noopener,noreferrer");
+        setIsShareDialogOpen(false);
+    };
 
     const RightSidebar = (
         <div className="space-y-6">
@@ -144,9 +167,50 @@ const stepProgress: Record<string, number> = {
                     <p className="text-xs text-muted-foreground">Market Detail</p>
                 </div>
                 <div className="flex items-center gap-2">
-                    <button className="p-2 hover:bg-secondary rounded-full transition-colors text-muted-foreground hover:text-foreground">
-                        <Share2 className="h-5 w-5" />
-                    </button>
+                    <Dialog.Root open={isShareDialogOpen} onOpenChange={setIsShareDialogOpen}>
+                        <Dialog.Trigger asChild>
+                            <button
+                                className="p-2 hover:bg-secondary rounded-full transition-colors text-muted-foreground hover:text-foreground"
+                                aria-label="Share this market"
+                            >
+                                <Share2 className="h-5 w-5" />
+                            </button>
+                        </Dialog.Trigger>
+                        <Dialog.Portal>
+                            <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
+                            <Dialog.Content
+                                className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-border bg-card p-6 shadow-2xl outline-none"
+                                aria-describedby="share-market-description"
+                            >
+                                <Dialog.Title className="text-xl font-bold text-foreground">
+                                    Share this market
+                                </Dialog.Title>
+                                <Dialog.Description
+                                    id="share-market-description"
+                                    className="mt-2 text-sm text-muted-foreground"
+                                >
+                                    Spread the word with a quick link or a pre-filled post on X.
+                                </Dialog.Description>
+
+                                <div className="mt-6 space-y-3">
+                                    <button
+                                        type="button"
+                                        onClick={handleCopyLink}
+                                        className="flex w-full items-center justify-center rounded-xl border border-border px-4 py-3 text-sm font-medium transition-colors hover:bg-secondary"
+                                    >
+                                        Copy Link
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleShareToX}
+                                        className="flex w-full items-center justify-center rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground transition-colors hover:opacity-90"
+                                    >
+                                        Share to X
+                                    </button>
+                                </div>
+                            </Dialog.Content>
+                        </Dialog.Portal>
+                    </Dialog.Root>
                     <button className="p-2 hover:bg-secondary rounded-full transition-colors text-muted-foreground hover:text-foreground">
                         <Flag className="h-5 w-5" />
                     </button>

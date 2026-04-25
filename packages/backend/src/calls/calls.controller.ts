@@ -6,14 +6,14 @@ import {
   Param,
   Query,
   Request,
-  HttpException,
-  HttpStatus,
   ServiceUnavailableException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { CallsService } from './calls.service';
 import { Call } from './call.entity';
 import { AdminService } from '../admin/admin.service';
+import { CallsQueryDto } from './dto/calls-query.dto';
 
 @Controller('calls')
 export class CallsController {
@@ -34,8 +34,8 @@ export class CallsController {
   }
 
   @Get()
-  findAll(@Query('chain') chain?: 'base' | 'stellar') {
-    return this.callsService.findAll({ chain });
+  findAll(@Query() query: CallsQueryDto) {
+    return this.callsService.findAll(query);
   }
 
   @Get(':id')
@@ -51,7 +51,7 @@ export class CallsController {
   ) {
     const wallet = req.user?.wallet || req.headers['x-user-wallet'];
     if (!wallet) {
-      throw new HttpException('Unauthorized', HttpStatus.UNAUTHORIZED);
+      throw new UnauthorizedException('Unauthorized');
     }
     return this.callsService.report(+id, reason);
   }
