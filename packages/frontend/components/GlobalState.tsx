@@ -155,11 +155,11 @@ export function GlobalStateProvider({ children }: { children: React.ReactNode })
     try {
       const res = await fetch(buildApiUrl("/calls"));
       if (!res.ok) throw new Error("Failed to fetch calls");
-      const data = await res.json();
+      const payload = await res.json();
 
       // map backend data to Call interface
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const mappedCalls: Call[] = data.map((item: any) => ({
+      const mappedCalls: Call[] = (payload.data ?? []).map((item: any) => ({
         id: item.callOnchainId || item.id,
         ...item
       }));

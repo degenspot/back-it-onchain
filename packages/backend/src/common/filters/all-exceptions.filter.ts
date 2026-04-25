@@ -32,6 +32,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     let status: number;
     let title: string;
     let detail: string;
+    let violations: Array<{ field: string; message: string }> | undefined;
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
@@ -42,13 +43,22 @@ export class AllExceptionsFilter implements ExceptionFilter {
         detail = exceptionResponse;
       } else if (typeof exceptionResponse === 'object' && exceptionResponse !== null) {
         const body = exceptionResponse as Record<string, unknown>;
-        title = typeof body['error'] === 'string' ? body['error'] : this.httpStatusTitle(status);
+        title =
+          typeof body['title'] === 'string'
+            ? body['title']
+            : typeof body['error'] === 'string'
+              ? body['error']
+              : this.httpStatusTitle(status);
         const message = body['message'];
-        detail = Array.isArray(message)
-          ? message.join('; ')
-          : typeof message === 'string'
-            ? message
-            : exception.message;
+        detail =
+          typeof body['detail'] === 'string'
+            ? body['detail']
+            : Array.isArray(message)
+              ? message.join('; ')
+              : typeof message === 'string'
+                ? message
+                : exception.message;
+        violations = this.parseViolations(body['violations']);
       } else {
         title = this.httpStatusTitle(status);
         detail = exception.message;
@@ -68,7 +78,34 @@ export class AllExceptionsFilter implements ExceptionFilter {
       title,
       status,
       detail,
-      instance: request.url,
+      instance: request.originalUrl || request.url,
+      ...(violations ? { violations } : {}),
+    });
+  }
+
+  private parseViolations(
+    value: unknown,
+  ): Array<{ field: string; message: string }> | undefined {
+    if (!Array.isArray(value)) {
+      return undefined;
+    }
+
+    return value.flatMap((entry) => {
+      if (
+        typeof entry === 'object' &&
+        entry !== null &&
+        typeof (entry as Record<string, unknown>).field === 'string' &&
+        typeof (entry as Record<string, unknown>).message === 'string'
+      ) {
+        return [
+          {
+            field: (entry as Record<string, string>).field,
+            message: (entry as Record<string, string>).message,
+          },
+        ];
+      }
+
+      return [];
     });
   }
 

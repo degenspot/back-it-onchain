@@ -3,6 +3,7 @@ import { CallsService } from './calls.service';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Call } from './call.entity';
 import { Repository } from 'typeorm';
+import { NotFoundException } from '@nestjs/common';
 
 describe('CallsService', () => {
   let service: CallsService;
@@ -12,6 +13,7 @@ describe('CallsService', () => {
     create: jest.fn(),
     save: jest.fn(),
     findOne: jest.fn(),
+    findAndCount: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -52,25 +54,101 @@ describe('CallsService', () => {
     });
   });
 
-  // -----------------------------
-  // FIND ONE
-  // -----------------------------
+  describe('findAll', () => {
+    it('should return paginated calls with metadata', async () => {
+      const mockCalls = [
+        { id: 1, title: 'ETH', description: 'UP' },
+        { id: 2, title: 'BTC', description: 'DOWN' },
+      ];
+
+      mockCallRepository.findAndCount.mockResolvedValue([mockCalls, 17]);
+
+      const result = await service.findAll({
+        chain: 'base',
+        limit: 20,
+        offset: 10,
+      });
+
+      expect(repository.findAndCount).toHaveBeenCalledWith({
+        where: { isHidden: false, chain: 'base' },
+        order: { createdAt: 'DESC' },
+        relations: ['creator'],
+        take: 20,
+        skip: 10,
+      });
+      expect(result).toEqual({
+        data: mockCalls,
+        meta: {
+          total: 17,
+          limit: 20,
+          offset: 10,
+        },
+      });
+    });
+  });
+
   describe('findOne', () => {
-    it('should return call when found', async () => {
+    it('should return a call envelope when found', async () => {
       const mockCall = { id: 123, title: 'ETH', description: 'DOWN' };
       mockCallRepository.findOne.mockResolvedValue(mockCall);
 
       const result = await service.findOne(123);
 
-      expect(repository.findOne).toHaveBeenCalledWith({ where: { id: 123 } });
-      expect(result).toEqual(mockCall);
+      expect(repository.findOne).toHaveBeenCalledWith({
+        where: { id: 123 },
+        relations: ['creator'],
+      });
+      expect(result).toEqual({
+        data: mockCall,
+        meta: null,
+      });
     });
 
-    it('should return null when call not found', async () => {
+    it('should throw when call is not found', async () => {
       mockCallRepository.findOne.mockResolvedValue(null);
 
-      const result = await service.findOne(999);
-      expect(result).toBeNull();
+      await expect(service.findOne(999)).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('report', () => {
+    it('should increment the report count and persist the call', async () => {
+      const mockCall = { id: 50, reportCount: 2, isHidden: false } as Call;
+      mockCallRepository.findOne.mockResolvedValue(mockCall);
+      mockCallRepository.save.mockResolvedValue(mockCall);
+
+      const result = await service.report(50, 'Spam');
+
+      expect(repository.save).toHaveBeenCalledWith({
+        ...mockCall,
+        reportCount: 3,
+      });
+      expect(result).toEqual({
+        success: true,
+        message: 'Report submitted successfully',
+      });
+    });
+
+    it('should hide a call after five reports', async () => {
+      const mockCall = { id: 50, reportCount: 4, isHidden: false } as Call;
+      mockCallRepository.findOne.mockResolvedValue(mockCall);
+      mockCallRepository.save.mockResolvedValue(mockCall);
+
+      await service.report(50, 'Offensive');
+
+      expect(repository.save).toHaveBeenCalledWith({
+        ...mockCall,
+        reportCount: 5,
+        isHidden: true,
+      });
+    });
+
+    it('should throw when the reported call does not exist', async () => {
+      mockCallRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.report(999, 'Spam')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 });

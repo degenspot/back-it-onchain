@@ -1,11 +1,8 @@
 import type { Metadata } from 'next';
-import { Inter } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/components/Providers";
 import { I18nProvider } from "@/components/I18nProvider";
 import '@coinbase/onchainkit/styles.css';
-
-const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "Back It (Onchain)",
@@ -19,7 +16,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={inter.className}>
+      <body className="antialiased">
         <I18nProvider>
           <Providers>{children}</Providers>
         </I18nProvider>

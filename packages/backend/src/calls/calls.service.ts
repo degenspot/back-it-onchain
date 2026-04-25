@@ -1,10 +1,30 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Call } from './call.entity';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+
+type CallsListOptions = {
+  chain?: 'base' | 'stellar';
+  limit: number;
+  offset: number;
+};
+
+type CallsListResponse = {
+  data: Call[];
+  meta: {
+    total: number;
+    limit: number;
+    offset: number;
+  };
+};
+
+type CallResponse = {
+  data: Call;
+  meta: null;
+};
 
 @Injectable()
 export class CallsService {
@@ -18,20 +38,44 @@ export class CallsService {
     return this.callsRepository.save(call);
   }
 
-  async findAll(options?: { chain?: 'base' | 'stellar' }): Promise<Call[]> {
+  async findAll(options: CallsListOptions): Promise<CallsListResponse> {
     const where: any = { isHidden: false };
-    if (options?.chain) {
+    if (options.chain) {
       where.chain = options.chain;
     }
-    return this.callsRepository.find({
+
+    const [data, total] = await this.callsRepository.findAndCount({
       where,
       order: { createdAt: 'DESC' },
       relations: ['creator'],
+      take: options.limit,
+      skip: options.offset,
     });
+
+    return {
+      data,
+      meta: {
+        total,
+        limit: options.limit,
+        offset: options.offset,
+      },
+    };
   }
 
-  async findOne(id: number): Promise<Call | null> {
-    return this.callsRepository.findOne({ where: { id } });
+  async findOne(id: number): Promise<CallResponse> {
+    const call = await this.callsRepository.findOne({
+      where: { id },
+      relations: ['creator'],
+    });
+
+    if (!call) {
+      throw new NotFoundException('Call not found');
+    }
+
+    return {
+      data: call,
+      meta: null,
+    };
   }
 
   async report(
@@ -40,7 +84,7 @@ export class CallsService {
   ): Promise<{ success: boolean; message: string }> {
     const call = await this.callsRepository.findOne({ where: { id } });
     if (!call) {
-      return { success: false, message: 'Call not found' };
+      throw new NotFoundException('Call not found');
     }
 
     call.reportCount += 1;

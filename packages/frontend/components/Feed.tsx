@@ -25,8 +25,8 @@ export function Feed() {
                 const params = chainFilter !== 'all' ? `?chain=${chainFilter}` : '';
                 const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/calls${params}`);
                 if (response.ok) {
-                    const data = await response.json();
-                    setCalls(data);
+                    const payload = await response.json();
+                    setCalls(payload.data ?? []);
                 } else {
                     // Fallback to mock data if API fails
                     setCalls([
