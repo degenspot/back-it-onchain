@@ -8,6 +8,7 @@ import {
 
 @Entity()
 @Index(['callOnchainId', 'createdAt'])
+@Index('IDX_stake_activity_staker', ['stakerWallet'])
 export class StakeActivity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
