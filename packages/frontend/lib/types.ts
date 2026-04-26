@@ -8,6 +8,7 @@ export interface User {
   avatar?: string; // Legacy UI
   isFollowing?: boolean;
   createdAt?: string;
+  usdcBalance?: number;
 }
 
 export interface Call {
