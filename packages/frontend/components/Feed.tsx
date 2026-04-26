@@ -163,7 +163,7 @@ export function Feed() {
                     list = list.sort((a,b) => (new Date(b.createdAt || '').getTime() || 0) - (new Date(a.createdAt || '').getTime() || 0));
                 } else {
                     // for-you: simple algorithmic sort: prioritize base chain
-                    list = list.sort((a,b) => (a.chain === 'base' ? -1 : 1));
+                    list = list.sort((a, _b) => (a.chain === 'base' ? -1 : 1));
                 }
 
                 if (tab === 'following' && list.length === 0) {

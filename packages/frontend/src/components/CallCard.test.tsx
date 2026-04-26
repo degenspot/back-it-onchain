@@ -4,11 +4,11 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import { describe, it, expect, vi } from 'vitest';
 import { CallCard } from '../../components/CallCard';
+import { type Call } from '../../lib/types';
 
 // Mock next/link
 vi.mock('next/link', () => {
   return {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     default: ({ children, href }: any) => {
       return <a href={href}>{children}</a>;
     }
@@ -16,7 +16,7 @@ vi.mock('next/link', () => {
 });
 
 describe('CallCard Component', () => {
-  const mockCall = {
+  const mockCall: Call = {
     id: 'call-123',
     title: 'Bitcoin ETF Approval',
     conditionJson: {
@@ -45,7 +45,7 @@ describe('CallCard Component', () => {
     });
 
     it('should render call title from title prop as fallback', () => {
-      const callWithoutCondition = {
+      const callWithoutCondition: Call = {
         ...mockCall,
         conditionJson: undefined,
       };
@@ -54,7 +54,7 @@ describe('CallCard Component', () => {
     });
 
     it('should display "Untitled Call" when no title is provided', () => {
-      const callWithoutTitle = {
+      const callWithoutTitle: Call = {
         ...mockCall,
         title: undefined,
         conditionJson: undefined,
@@ -95,7 +95,7 @@ describe('CallCard Component', () => {
     });
 
     it('should handle zero stake amounts', () => {
-      const callWithZeroStakes = {
+      const callWithZeroStakes: Call = {
         ...mockCall,
         totalStakeYes: '0',
         totalStakeNo: '0',
@@ -105,7 +105,7 @@ describe('CallCard Component', () => {
     });
 
     it('should handle missing stake amounts gracefully', () => {
-      const callWithoutStakes = {
+      const callWithoutStakes: Call = {
         ...mockCall,
         totalStakeYes: undefined,
         totalStakeNo: undefined,
@@ -138,7 +138,7 @@ describe('CallCard Component', () => {
     });
 
     it('should display "Ended" when deadline has passed', () => {
-      const passedCall = {
+      const passedCall: Call = {
         ...mockCall,
         endTs: new Date(Date.now() - 1000).toISOString(),
       };
@@ -147,7 +147,7 @@ describe('CallCard Component', () => {
     });
 
     it('should display time in minutes when less than 60 minutes remain', () => {
-      const shortTimeCall = {
+      const shortTimeCall: Call = {
         ...mockCall,
         endTs: new Date(Date.now() + 30 * 60 * 1000).toISOString(), // 30 minutes
       };
@@ -157,7 +157,7 @@ describe('CallCard Component', () => {
     });
 
     it('should display time in hours when less than 24 hours remain', () => {
-      const mediumTimeCall = {
+      const mediumTimeCall: Call = {
         ...mockCall,
         endTs: new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString(), // 5 hours
       };
@@ -167,7 +167,7 @@ describe('CallCard Component', () => {
     });
 
     it('should display time in days when more than 24 hours remain', () => {
-      const longTimeCall = {
+      const longTimeCall: Call = {
         ...mockCall,
         endTs: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString(), // 10 days
       };
@@ -184,7 +184,7 @@ describe('CallCard Component', () => {
     });
 
     it('should show Quick Stake button on hover', () => {
-      const { container } = render(<CallCard call={mockCall} />);
+      render(<CallCard call={mockCall as any} />);
       const button = screen.getByText('Quick Stake');
       expect(button).toBeInTheDocument();
       expect(button.parentElement).toHaveClass('opacity-0', 'group-hover:opacity-100');
@@ -230,7 +230,7 @@ describe('CallCard Component', () => {
     });
 
     it('should display Quick Stake button for active calls', () => {
-      const activeCall = {
+      const activeCall: Call = {
         ...mockCall,
         status: 'active',
       };
@@ -252,7 +252,7 @@ describe('CallCard Component', () => {
     });
 
     it('should display creator wallet as fallback', () => {
-      const callWithoutDisplayName = {
+      const callWithoutDisplayName: Call = {
         ...mockCall,
         creator: {
           wallet: '0xabc123',
@@ -264,7 +264,7 @@ describe('CallCard Component', () => {
 
     it('should display call creation date', () => {
       render(<CallCard call={mockCall as any} />);
-      const dateText = new Date(mockCall.createdAt).toLocaleDateString();
+      const dateText = new Date(mockCall.createdAt || '').toLocaleDateString();
       expect(screen.getByText(dateText)).toBeInTheDocument();
     });
 
@@ -279,7 +279,7 @@ describe('CallCard Component', () => {
     });
 
     it('should handle zero comments', () => {
-      const callWithoutComments = {
+      const callWithoutComments: Call = {
         ...mockCall,
         comments: 0,
       };
@@ -295,7 +295,7 @@ describe('CallCard Component', () => {
     });
 
     it('should display Stellar chain badge', () => {
-      const stellarCall = {
+      const stellarCall: Call = {
         ...mockCall,
         chain: 'stellar',
       };
@@ -304,7 +304,7 @@ describe('CallCard Component', () => {
     });
 
     it('should default to Base chain when not specified', () => {
-      const callWithoutChain = {
+      const callWithoutChain: Call = {
         ...mockCall,
         chain: undefined,
       };
@@ -329,7 +329,7 @@ describe('CallCard Component', () => {
     });
 
     it('should link to correct Stellar explorer URL', () => {
-      const stellarCall = {
+      const stellarCall: Call = {
         ...mockCall,
         chain: 'stellar',
       };
@@ -408,7 +408,7 @@ describe('CallCard Component', () => {
 
   describe('Hot Market Detection & Animation', () => {
     it('should apply pulse animation for hot markets (pool >= 100)', () => {
-      const hotCall = {
+      const hotCall: Call = {
         ...mockCall,
         totalStakeYes: '60',
         totalStakeNo: '50',
@@ -419,7 +419,7 @@ describe('CallCard Component', () => {
     });
 
     it('should not apply pulse animation for cold markets (pool < 100)', () => {
-      const coldCall = {
+      const coldCall: Call = {
         ...mockCall,
         totalStakeYes: '30',
         totalStakeNo: '20',
@@ -432,7 +432,7 @@ describe('CallCard Component', () => {
 
   describe('Edge Cases & Error Handling', () => {
     it('should handle missing creator information gracefully', () => {
-      const callWithoutCreator = {
+      const callWithoutCreator: Call = {
         ...mockCall,
         creator: undefined,
       };
@@ -442,7 +442,7 @@ describe('CallCard Component', () => {
     });
 
     it('should handle very large stake amounts', () => {
-      const callWithLargeStakes = {
+      const callWithLargeStakes: Call = {
         ...mockCall,
         totalStakeYes: '999999999999',
         totalStakeNo: '888888888888',
@@ -454,7 +454,7 @@ describe('CallCard Component', () => {
 
     it('should handle call with very long title', () => {
       const longTitle = 'A'.repeat(200);
-      const callWithLongTitle = {
+      const callWithLongTitle: Call = {
         ...mockCall,
         conditionJson: {
           title: longTitle,
@@ -465,7 +465,7 @@ describe('CallCard Component', () => {
     });
 
     it('should handle missing endTs gracefully', () => {
-      const callWithoutEndTs = {
+      const callWithoutEndTs: Call = {
         ...mockCall,
         endTs: undefined,
       };
@@ -475,7 +475,7 @@ describe('CallCard Component', () => {
     });
 
     it('should handle null stake token', () => {
-      const callWithoutToken = {
+      const callWithoutToken: Call = {
         ...mockCall,
         stakeToken: undefined,
       };

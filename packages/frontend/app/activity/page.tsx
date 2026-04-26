@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { AppLayout } from "@/components/AppLayout";
 import { useGlobalState } from "@/components/GlobalState";
 import { NotificationData, NotificationItem } from "@/components/NotificationItem";
@@ -19,7 +19,7 @@ export default function ActivityPage() {
     const [currentPage, setCurrentPage] = useState(1);
     const [hasMore, setHasMore] = useState(true);
 
-    const fetchNotifications = async (page: number = 1) => {
+    const fetchNotifications = useCallback(async (page: number = 1) => {
         if (!userWallet) return;
 
         setIsLoading(true);
@@ -56,7 +56,7 @@ export default function ActivityPage() {
         } finally {
             setIsLoading(false);
         }
-    };
+    }, [userWallet]);
 
     const handleMarkAsRead = async (notificationId: string) => {
         if (!userWallet) return;
@@ -82,7 +82,7 @@ export default function ActivityPage() {
         if (userWallet) {
             fetchNotifications(1);
         }
-    }, [userWallet]);
+    }, [userWallet, fetchNotifications]);
 
     const RightSidebar = (
         <div className="bg-secondary/20 rounded-xl p-6 border border-border">

@@ -47,7 +47,7 @@ export default function CallDetailPage() {
     const [amountError, setAmountError] = useState<string | null>(null);
     // Pull the balance from currentUser if GlobalState exposes it.
     // If you use wagmi's useBalance instead, swap this line for that hook's value.
-    const walletBalance: number | null = (currentUser as any)?.usdcBalance ?? null;
+    const walletBalance: number | null = currentUser?.usdcBalance ?? null;
     // ─────────────────────────────────────────────────────────────────────────
 
     const call = calls.find(c => c.id === id);

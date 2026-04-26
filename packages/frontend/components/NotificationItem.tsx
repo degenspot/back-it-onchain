@@ -27,9 +27,8 @@ interface NotificationItemProps {
 export function NotificationItem({
   notification,
   onMarkAsRead,
-  onDelete,
 }: NotificationItemProps) {
-  const handleClick = (e: React.MouseEvent) => {
+  const handleClick = () => {
     if (!notification.isRead && onMarkAsRead) {
       onMarkAsRead(notification.id);
     }

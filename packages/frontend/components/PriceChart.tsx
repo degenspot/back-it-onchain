@@ -13,36 +13,6 @@ interface PriceChartProps {
 }
 
 // Generate mock price history data
-function generateMockPriceData(startPrice: number, days: number = 30): CandlestickData[] {
-  const data: CandlestickData[] = [];
-  let currentPrice = startPrice;
-  const now = new Date();
-  
-  for (let i = days; i >= 0; i--) {
-    const date = new Date(now);
-    date.setDate(date.getDate() - i);
-    
-    // Random price movement
-    const volatility = 0.02; // 2% volatility
-    const change = (Math.random() - 0.5) * 2 * volatility;
-    const open = currentPrice;
-    const close = currentPrice * (1 + change);
-    const high = Math.max(open, close) * (1 + Math.random() * 0.01);
-    const low = Math.min(open, close) * (1 - Math.random() * 0.01);
-    
-    data.push({
-      time: date.toISOString().split("T")[0] as Time,
-      open: parseFloat(open.toFixed(6)),
-      high: parseFloat(high.toFixed(6)),
-      low: parseFloat(low.toFixed(6)),
-      close: parseFloat(close.toFixed(6)),
-    });
-    
-    currentPrice = close;
-  }
-  
-  return data;
-}
 
 // Generate area data for a smoother look
 function generateAreaData(startPrice: number, days: number = 30): AreaData[] {
@@ -79,7 +49,6 @@ export function PriceChart({
   const seriesRef = useRef<ISeriesApi<"Area"> | null>(null);
   const [currentPrice, setCurrentPrice] = useState(startPrice);
   const [priceChange, setPriceChange] = useState(0);
-  const [chartType, setChartType] = useState<"area" | "candle">("area");
 
   useEffect(() => {
     if (!chartContainerRef.current) return;

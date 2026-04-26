@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { NotificationDropdown } from './NotificationDropdown';
-import { NotificationData, NotificationItem } from './NotificationItem';
+import { NotificationData } from './NotificationItem';
 import { Bell } from 'lucide-react';
 import { useGlobalState } from './GlobalState';
 import { cn } from '@/lib/utils';
@@ -29,10 +29,9 @@ export function NotificationBell({
   const [isLoading, setIsLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
-  const [totalPages, setTotalPages] = useState(1);
 
   // Fetch unread count
-  const fetchUnreadCount = async () => {
+  const fetchUnreadCount = React.useCallback(async () => {
     if (!userWallet) return;
 
     try {
@@ -52,10 +51,10 @@ export function NotificationBell({
     } catch (error) {
       console.error('Failed to fetch unread count:', error);
     }
-  };
+  }, [userWallet]);
 
   // Fetch notifications
-  const fetchNotifications = async (page: number = 1) => {
+  const fetchNotifications = React.useCallback(async (page: number = 1) => {
     if (!userWallet) return;
 
     setIsLoading(true);
@@ -79,7 +78,6 @@ export function NotificationBell({
           setNotifications((prev) => [...prev, ...fetchedNotifications]);
         }
         setCurrentPage(page);
-        setTotalPages(data.totalPages || 1);
         setHasMore(page < (data.totalPages || 1));
       }
     } catch (error) {
@@ -87,7 +85,7 @@ export function NotificationBell({
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [userWallet]);
 
   // Mark notification as read
   const handleMarkAsRead = async (notificationId: string) => {
@@ -141,7 +139,7 @@ export function NotificationBell({
     if (isOpen) {
       fetchNotifications();
     }
-  }, [isOpen]);
+  }, [isOpen, fetchNotifications]);
 
   // Set up polling for unread count
   useEffect(() => {
@@ -151,7 +149,7 @@ export function NotificationBell({
     const interval = setInterval(fetchUnreadCount, pollingInterval);
 
     return () => clearInterval(interval);
-  }, [userWallet, pollingInterval]);
+  }, [userWallet, pollingInterval, fetchUnreadCount]);
 
 
   return (
