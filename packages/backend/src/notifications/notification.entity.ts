@@ -16,6 +16,8 @@ export enum NotificationType {
 }
 
 @Entity()
+@Index('IDX_notification_recipient', ['recipientWallet'])
+@Index('IDX_notification_unread', ['recipientWallet', 'isRead'])
 @Index(['recipientWallet', 'isRead', 'createdAt'])
 @Index(['recipientWallet', 'createdAt'])
 export class Notification {
@@ -45,8 +47,8 @@ export class Notification {
   createdAt: Date;
 
   @Column({ nullable: true })
-  resourceId: string; // Link to the specific resource (call ID, user wallet, etc.)
+  resourceId: string;
 
   @Column({ nullable: true })
-  resourceType: string; // Type of resource (call, user, etc.)
+  resourceType: string;
 }
