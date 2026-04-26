@@ -2,19 +2,33 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
 import { BadgesService } from '../badges/badges.service';
+import { CallsService } from '../calls/calls.service';
 
 describe('UsersController', () => {
   let controller: UsersController;
   let service: UsersService;
   let badges: BadgesService;
+  let calls: CallsService;
 
   const mockUsersService = {
     findByWallet: jest.fn(),
     updateProfile: jest.fn(),
+    exportHistory: jest.fn(),
+    getSettings: jest.fn(),
+    upsertSettings: jest.fn(),
+    follow: jest.fn(),
+    unfollow: jest.fn(),
+    getSocialStats: jest.fn(),
+    getReferralStats: jest.fn(),
+    isFollowing: jest.fn(),
   };
 
   const mockBadgesService = {
     getUserBadges: jest.fn(),
+  };
+
+  const mockCallsService = {
+    getStakesByWallet: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -29,12 +43,17 @@ describe('UsersController', () => {
           provide: BadgesService,
           useValue: mockBadgesService,
         },
+        {
+          provide: CallsService,
+          useValue: mockCallsService,
+        },
       ],
     }).compile();
 
     controller = module.get<UsersController>(UsersController);
     service = module.get<UsersService>(UsersService);
     badges = module.get<BadgesService>(BadgesService);
+    calls = module.get<CallsService>(CallsService);
   });
 
   afterEach(() => {
@@ -97,6 +116,20 @@ describe('UsersController', () => {
       await expect(
         controller.updateProfile('user-123', updateDto),
       ).rejects.toThrow('Update failed');
+    });
+  });
+
+  describe('getStakes', () => {
+    it('should return user stakes successfully', async () => {
+      const mockStakes = [
+        { id: 1, callId: 10, amount: 100, status: 'active' },
+      ];
+      mockCallsService.getStakesByWallet.mockResolvedValue(mockStakes);
+
+      const result = await controller.getStakes('user-123');
+
+      expect(calls.getStakesByWallet).toHaveBeenCalledWith('user-123');
+      expect(result).toEqual(mockStakes);
     });
   });
 });
