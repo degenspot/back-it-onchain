@@ -15,38 +15,62 @@ import { MarketDetailRightSidebarSkeleton } from "@/components/MarketDetailRight
 import * as Dialog from "@radix-ui/react-dialog";
 import { toast } from "sonner";
 
+// ── NEW: USDC uses 6 decimal places on Base ──────────────────────────────────
+const USDC_DECIMALS = 6;
+
+// Returns an error string if the input is invalid, null if it's fine
+function validateAmount(raw: string, walletBalance: number | null): string | null {
+    if (!raw || raw.trim() === "") return "Please enter an amount.";
+    const value = parseFloat(raw);
+    if (isNaN(value) || value <= 0) return "Amount must be greater than 0.";
+    const parts = raw.split(".");
+    if (parts[1] && parts[1].length > USDC_DECIMALS) {
+        return `Max ${USDC_DECIMALS} decimal places for USDC.`;
+    }
+    if (walletBalance !== null && value > walletBalance) {
+        return "Amount exceeds your wallet balance.";
+    }
+    return null;
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function CallDetailPage() {
     const params = useParams();
     const id = params?.id as string;
-    const { calls, stakeOnCall, isLoading, stakingStep } = useGlobalState();
+    const { calls, stakeOnCall, isLoading, stakingStep, currentUser } = useGlobalState();
     const [stakingType, setStakingType] = useState<'back' | 'challenge' | null>(null);
     const [isFetching, setIsFetching] = useState(true);
     const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
 
+    // ── NEW: stake amount state ───────────────────────────────────────────────
+    const [stakeAmount, setStakeAmount] = useState<string>("");
+    const [amountError, setAmountError] = useState<string | null>(null);
+    // Pull the balance from currentUser if GlobalState exposes it.
+    // If you use wagmi's useBalance instead, swap this line for that hook's value.
+    const walletBalance: number | null = (currentUser as any)?.usdcBalance ?? null;
+    // ─────────────────────────────────────────────────────────────────────────
+
     const call = calls.find(c => c.id === id);
 
     const stepLabels: Record<string, string> = {
-  idle: "",
-  approving: "Step 1/2: Approving token…",
-  approved: "Step 1/2: Approval confirmed",
-  staking: "Step 2/2: Staking…",
-  confirmed: "Step 2/2: Confirmed",
-};
+        idle: "",
+        approving: "Step 1/2: Approving token…",
+        approved: "Step 1/2: Approval confirmed",
+        staking: "Step 2/2: Staking…",
+        confirmed: "Step 2/2: Confirmed",
+    };
 
-const stepProgress: Record<string, number> = {
-  idle: 0,
-  approving: 25,
-  approved: 50,
-  staking: 75,
-  confirmed: 100,
-};
-    // Simulate initial data fetching
+    const stepProgress: Record<string, number> = {
+        idle: 0,
+        approving: 25,
+        approved: 50,
+        staking: 75,
+        confirmed: 100,
+    };
+
     useEffect(() => {
         if (calls.length > 0) {
-            // Add a small delay to show skeleton
-            const timer = setTimeout(() => {
-                setIsFetching(false);
-            }, 300);
+            const timer = setTimeout(() => setIsFetching(false), 300);
             return () => clearTimeout(timer);
         }
     }, [calls]);
@@ -70,9 +94,7 @@ const stepProgress: Record<string, number> = {
         );
     }
 
-    // Parse stake amount for calculations
-    // const stakeAmount = parseFloat(String(call.stake || "").split(" ")[0]) || 0;
-    const startPrice = 0.12; // Mock start price
+    const startPrice = 0.12;
     const targetPrice = parseFloat(String(call.target || "").replace(/[^0-9.]/g, "")) || startPrice * 1.25;
     const shareTitle = String(call.title || call.conditionJson?.title || "Check out this market");
 
@@ -95,9 +117,34 @@ const stepProgress: Record<string, number> = {
         setIsShareDialogOpen(false);
     };
 
+    // ── NEW: handlers ─────────────────────────────────────────────────────────
+    function handleAmountChange(val: string) {
+        setStakeAmount(val);
+        setAmountError(validateAmount(val, walletBalance));
+    }
+
+    function handleMax() {
+        if (walletBalance !== null) {
+            const maxStr = walletBalance.toFixed(USDC_DECIMALS);
+            setStakeAmount(maxStr);
+            setAmountError(validateAmount(maxStr, walletBalance));
+        }
+    }
+
+    async function handleConfirmStake() {
+        const error = validateAmount(stakeAmount, walletBalance);
+        if (error) { setAmountError(error); return; }
+        // BEFORE: await stakeOnCall(id, 100, stakingType);
+        // AFTER:
+        await stakeOnCall(id, parseFloat(stakeAmount), stakingType!);
+        setStakingType(null);
+        setStakeAmount("");
+        setAmountError(null);
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     const RightSidebar = (
         <div className="space-y-6">
-            {/* Market Stats */}
             <div className="bg-secondary/20 rounded-xl p-6 border border-border">
                 <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
                     <BarChart3 className="h-5 w-5 text-primary" />
@@ -132,7 +179,6 @@ const stepProgress: Record<string, number> = {
                 </div>
             </div>
 
-            {/* Creator Info */}
             <div className="bg-secondary/20 rounded-xl p-6 border border-border">
                 <h3 className="font-bold text-lg mb-4">About Creator</h3>
                 <div className="flex items-center gap-3 mb-4">
@@ -157,7 +203,6 @@ const stepProgress: Record<string, number> = {
                 <Loader text={stepLabels[stakingStep as keyof typeof stepLabels] || "Processing transaction..."} />
             )}
 
-            {/* Header */}
             <header className="sticky top-0 z-40 bg-background/80 backdrop-blur-md border-b border-border px-4 py-3 flex items-center gap-4">
                 <Link href="/feed" className="p-2 hover:bg-secondary rounded-full transition-colors">
                     <ArrowLeft className="h-5 w-5" />
@@ -218,7 +263,6 @@ const stepProgress: Record<string, number> = {
             </header>
 
             <div className="p-6">
-                {/* Price Chart Section */}
                 <section className="mb-8">
                     <PriceChart
                         asset={call.asset || "Unknown"}
@@ -228,7 +272,6 @@ const stepProgress: Record<string, number> = {
                     />
                 </section>
 
-                {/* Call Header Info */}
                 <div className="mb-6">
                     <div className="flex items-center gap-2 mb-4">
                         <div className={`h-10 w-10 rounded-full ${call.creator?.avatar || 'bg-primary'} flex items-center justify-center font-bold text-white text-sm`}>
@@ -249,7 +292,6 @@ const stepProgress: Record<string, number> = {
                     </div>
                 </div>
 
-                {/* Thesis Section - Prominent Display */}
                 <section className="mb-8">
                     <div className="bg-gradient-to-br from-secondary/50 to-secondary/20 rounded-xl p-6 border border-border">
                         <div className="flex items-center gap-2 mb-4">
@@ -274,21 +316,53 @@ const stepProgress: Record<string, number> = {
                 <section className="mb-8">
                     {stakingType ? (
                         <div className="bg-card border border-border rounded-xl p-6 animate-in fade-in zoom-in-95">
-                            <h3 className="font-bold text-lg mb-2">
+                            <h3 className="font-bold text-lg mb-4">
                                 Confirm {stakingType === 'back' ? 'Backing' : 'Challenge'}
                             </h3>
 
-                            <p className="text-muted-foreground text-sm mb-4">
-                                You are about to stake 100 USDC on this prediction.
-                            </p>
+                            {/* ── NEW: amount input (replaces the hardcoded "100 USDC" text) ── */}
+                            <div className="mb-4 space-y-1">
+                                <label className="block text-sm font-medium text-muted-foreground">
+                                    Amount (USDC)
+                                </label>
+                                <div className="flex items-center gap-2">
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        step="0.000001"
+                                        placeholder="0.00"
+                                        value={stakeAmount}
+                                        onChange={(e) => handleAmountChange(e.target.value)}
+                                        className={cn(
+                                            "w-full rounded-lg border px-3 py-2 text-sm bg-background",
+                                            "focus:outline-none focus:ring-2 focus:ring-primary",
+                                            amountError ? "border-red-500" : "border-border"
+                                        )}
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={handleMax}
+                                        disabled={walletBalance === null}
+                                        className="shrink-0 rounded-lg border border-border px-3 py-2 text-sm
+                                            font-medium hover:bg-secondary transition-colors disabled:opacity-40"
+                                    >
+                                        Max
+                                    </button>
+                                </div>
+                                {walletBalance !== null && (
+                                    <p className="text-xs text-muted-foreground">
+                                        Balance: {walletBalance.toFixed(2)} USDC
+                                    </p>
+                                )}
+                                {amountError && (
+                                    <p className="text-xs text-red-500">{amountError}</p>
+                                )}
+                            </div>
+                            {/* ──────────────────────────────────────────────────────────── */}
 
-                            {/* ✅ STEP INDICATOR */}
                             {stakingStep !== "idle" && (
                                 <div className="mb-4">
-                                    <p className="text-sm font-medium mb-2">
-                                        {stepLabels[stakingStep]}
-                                    </p>
-
+                                    <p className="text-sm font-medium mb-2">{stepLabels[stakingStep]}</p>
                                     <div className="w-full bg-secondary rounded-full h-2 overflow-hidden">
                                         <div
                                             className="h-full bg-primary transition-all duration-500"
@@ -300,23 +374,21 @@ const stepProgress: Record<string, number> = {
 
                             <div className="flex gap-3">
                                 <button
-                                    onClick={() => setStakingType(null)}
+                                    onClick={() => { setStakingType(null); setStakeAmount(""); setAmountError(null); }}
                                     disabled={isLoading}
                                     className="flex-1 py-3 rounded-xl font-medium hover:bg-secondary transition-colors disabled:opacity-50"
                                 >
                                     Cancel
                                 </button>
-
                                 <button
-                                    onClick={async () => {
-                                        await stakeOnCall(id, 100, stakingType);
-                                        setStakingType(null);
-                                    }}
-                                    disabled={isLoading}
-                                    className={`flex-1 py-3 rounded-xl font-bold text-white transition-colors disabled:opacity-50 ${stakingType === 'back'
+                                    onClick={handleConfirmStake}
+                                    disabled={isLoading || !!amountError || !stakeAmount}
+                                    className={cn(
+                                        "flex-1 py-3 rounded-xl font-bold text-white transition-colors disabled:opacity-50",
+                                        stakingType === 'back'
                                             ? 'bg-green-500 hover:bg-green-600'
                                             : 'bg-red-500 hover:bg-red-600'
-                                        }`}
+                                    )}
                                 >
                                     {isLoading ? "Processing..." : "Confirm Stake"}
                                 </button>
@@ -342,7 +414,6 @@ const stepProgress: Record<string, number> = {
                     )}
                 </section>
 
-                {/* Activity Log / Order Book */}
                 <section className="mb-8">
                     <div className="flex items-center gap-2 mb-4">
                         <Users className="h-5 w-5 text-primary" />
@@ -351,7 +422,6 @@ const stepProgress: Record<string, number> = {
                     <ActivityLog />
                 </section>
 
-                {/* Interaction Stats */}
                 <div className="flex items-center justify-between border-y border-border py-4">
                     <div className="flex gap-6">
                         <div className="flex items-center gap-2 text-muted-foreground">
