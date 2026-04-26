@@ -4,7 +4,10 @@ import {
   Column,
   CreateDateColumn,
   Index,
+  ManyToOne,
+  JoinColumn,
 } from 'typeorm';
+import { Call } from './call.entity';
 
 @Entity('participants')
 @Index('IDX_participant_call_wallet', ['callId', 'wallet'])
@@ -14,6 +17,10 @@ export class Participant {
 
   @Column()
   callId: string;
+
+  @ManyToOne(() => Call)
+  @JoinColumn({ name: 'callId' })
+  call: Call;
 
   @Column()
   wallet: string;

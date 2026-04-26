@@ -13,6 +13,7 @@ import {
 import { Response } from 'express';
 import { UsersService, ExportFormat } from './users.service';
 import { BadgesService } from '../badges/badges.service';
+import { CallsService } from '../calls/calls.service';
 import { UpdateUserSettingsDto } from './dto/update-user-settings.dto';
 
 @Controller('users')
@@ -20,6 +21,7 @@ export class UsersController {
   constructor(
     private readonly usersService: UsersService,
     private readonly badgesService: BadgesService,
+    private readonly callsService: CallsService,
   ) {}
 
   /**
@@ -164,5 +166,10 @@ export class UsersController {
       targetWallet,
     );
     return { isFollowing };
+  }
+
+  @Get(':wallet/stakes')
+  async getStakes(@Param('wallet') wallet: string) {
+    return this.callsService.getStakesByWallet(wallet);
   }
 }

@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Call } from './call.entity';
+import { Participant } from './participant.entity';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
@@ -31,6 +32,8 @@ export class CallsService {
   constructor(
     @InjectRepository(Call)
     private callsRepository: Repository<Call>,
+    @InjectRepository(Participant)
+    private participantsRepository: Repository<Participant>,
   ) {}
 
   async create(callData: Partial<Call>): Promise<Call> {
@@ -123,5 +126,91 @@ export class CallsService {
       return Promise.resolve(JSON.parse(content));
     }
     return Promise.resolve(null);
+  }
+
+  async getStakesByWallet(wallet: string): Promise<any[]> {
+    const participants = await this.participantsRepository.find({
+      where: { wallet },
+      relations: ['call'],
+    });
+
+    const now = new Date();
+
+    return participants.map((participant) => {
+      const call = participant.call as Call;
+      const isSettled = call.status === 'SETTLED' || call.outcome !== null;
+      const hasEnded = new Date(call.endTs) <= now;
+
+      // Determine status
+      let status: 'active' | 'settled' | 'claimable' = 'active';
+      if (isSettled) {
+        if (participant.position === call.outcome) {
+          status = 'claimable';
+        } else {
+          status = 'settled';
+        }
+      } else if (hasEnded) {
+        status = 'settled';
+      }
+
+      // Calculate time left
+      const timeLeft = hasEnded
+        ? 'Ended'
+        : getTimeRemaining(call.endTs);
+
+      // Get call title from conditionJson or fallback
+      const callTitle = call.conditionJson?.title || `Market #${call.id}`;
+
+      // Calculate payout for winning stakes
+      let payout: number | undefined;
+      if (status === 'claimable') {
+        const totalStakeYes = call.totalStakeYes || 0;
+        const totalStakeNo = call.totalStakeNo || 0;
+        const totalPool = totalStakeYes + totalStakeNo;
+        const userStake = participant.amount;
+
+        if (totalPool > 0) {
+          const userSidePool = participant.position ? totalStakeYes : totalStakeNo;
+          const losingPool = participant.position ? totalStakeNo : totalStakeYes;
+          payout = userStake + (losingPool * (userStake / userSidePool));
+        } else {
+          payout = userStake;
+        }
+      }
+
+      return {
+        id: participant.id,
+        callId: call.id,
+        callTitle,
+        choice: participant.position ? 'yes' : 'no',
+        amount: participant.amount,
+        chain: call.chain,
+        timeLeft: status === 'active' ? timeLeft : undefined,
+        status,
+        payout,
+        result: status === 'claimable' ? 'won' : status === 'settled' ? 'lost' : undefined,
+      };
+    });
+  }
+}
+
+function getTimeRemaining(endTs: string | Date): string {
+  try {
+    const now = new Date();
+    const end = new Date(endTs);
+    const diff = Math.max(0, end.getTime() - now.getTime());
+
+    if (diff === 0) return "Ended";
+
+    const mins = Math.floor(diff / 60000);
+    if (mins < 60) return `${mins}m`;
+
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h`;
+
+    const days = Math.floor(hrs / 24);
+    return `${days}d`;
+  } catch {
+    return "TBD";
   }
 }
