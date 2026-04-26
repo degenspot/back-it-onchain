@@ -8,6 +8,7 @@ import { ChainSelector } from "@/components/ChainSelector";
 import { WalletConnectButton } from "@/components/WalletConnectButton";
 import MarketTicker from "@/components/MarketTicker";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
+import { TrendingSidebar } from "@/components/TrendingSidebar";
 
 export default function LandingPage() {
   const t = useTranslations("Landing");
@@ -87,6 +88,7 @@ export default function LandingPage() {
             </div>
           </div>
         </section>
+        <TrendingSidebar />
       </main>
 
       <footer className="border-t border-border py-8 bg-card">
