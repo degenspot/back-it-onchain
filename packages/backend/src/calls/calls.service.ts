@@ -164,8 +164,8 @@ export class CallsService {
       // Calculate payout for winning stakes
       let payout: number | undefined;
       if (status === 'claimable') {
-        const totalStakeYes = parseFloat(call.totalStakeYes) || 0;
-        const totalStakeNo = parseFloat(call.totalStakeNo) || 0;
+        const totalStakeYes = call.totalStakeYes || 0;
+        const totalStakeNo = call.totalStakeNo || 0;
         const totalPool = totalStakeYes + totalStakeNo;
         const userStake = participant.amount;
 
