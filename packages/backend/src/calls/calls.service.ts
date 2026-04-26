@@ -3,9 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Call } from './call.entity';
 import { Participant } from './participant.entity';
-import * as fs from 'fs';
-import * as path from 'path';
-import * as crypto from 'crypto';
+import { IpfsService } from '../ipfs/ipfs.service';
 
 type CallsListOptions = {
   chain?: 'base' | 'stellar';
@@ -34,6 +32,7 @@ export class CallsService {
     private callsRepository: Repository<Call>,
     @InjectRepository(Participant)
     private participantsRepository: Repository<Participant>,
+    private readonly ipfsService: IpfsService,
   ) {}
 
   async create(callData: Partial<Call>): Promise<Call> {
@@ -104,28 +103,14 @@ export class CallsService {
   }
 
   async uploadIpfs(data: any): Promise<{ cid: string }> {
-    const uploadsDir = path.join(__dirname, '..', '..', 'uploads');
-    if (!fs.existsSync(uploadsDir)) {
-      fs.mkdirSync(uploadsDir, { recursive: true });
-    }
-
-    const content = JSON.stringify(data);
-    const hash = crypto.createHash('sha256').update(content).digest('hex');
-    const cid = `Qm${hash.substring(0, 44)} `; // Mock CID format
-
-    fs.writeFileSync(path.join(uploadsDir, cid), content);
-    return Promise.resolve({ cid });
+    const buffer = Buffer.from(JSON.stringify(data));
+    const cid = await this.ipfsService.pin(buffer, 'data.json');
+    return { cid };
   }
 
   async getIpfs(cid: string): Promise<any> {
-    const uploadsDir = path.join(__dirname, '..', '..', 'uploads');
-    const filePath = path.join(uploadsDir, cid);
-
-    if (fs.existsSync(filePath)) {
-      const content = fs.readFileSync(filePath, 'utf-8');
-      return Promise.resolve(JSON.parse(content));
-    }
-    return Promise.resolve(null);
+    const buffer = await this.ipfsService.fetch(cid);
+    return JSON.parse(buffer.toString('utf-8'));
   }
 
   async getStakesByWallet(wallet: string): Promise<any[]> {
@@ -141,7 +126,6 @@ export class CallsService {
       const isSettled = call.status === 'SETTLED' || call.outcome !== null;
       const hasEnded = new Date(call.endTs) <= now;
 
-      // Determine status
       let status: 'active' | 'settled' | 'claimable' = 'active';
       if (isSettled) {
         if (participant.position === call.outcome) {
@@ -153,15 +137,9 @@ export class CallsService {
         status = 'settled';
       }
 
-      // Calculate time left
-      const timeLeft = hasEnded
-        ? 'Ended'
-        : getTimeRemaining(call.endTs);
-
-      // Get call title from conditionJson or fallback
+      const timeLeft = hasEnded ? 'Ended' : getTimeRemaining(call.endTs);
       const callTitle = call.conditionJson?.title || `Market #${call.id}`;
 
-      // Calculate payout for winning stakes
       let payout: number | undefined;
       if (status === 'claimable') {
         const totalStakeYes = call.totalStakeYes || 0;
@@ -200,7 +178,7 @@ function getTimeRemaining(endTs: string | Date): string {
     const end = new Date(endTs);
     const diff = Math.max(0, end.getTime() - now.getTime());
 
-    if (diff === 0) return "Ended";
+    if (diff === 0) return 'Ended';
 
     const mins = Math.floor(diff / 60000);
     if (mins < 60) return `${mins}m`;
@@ -211,6 +189,6 @@ function getTimeRemaining(endTs: string | Date): string {
     const days = Math.floor(hrs / 24);
     return `${days}d`;
   } catch {
-    return "TBD";
+    return 'TBD';
   }
 }

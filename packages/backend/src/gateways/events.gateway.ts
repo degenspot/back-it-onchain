@@ -301,4 +301,16 @@ export class EventsGateway
   sendToUser<T>(userId: string, event: string, data: T): void {
     this.server.to(USER_ROOM(userId)).emit(event, data);
   }
+
+  emitCallCreated(callId: number, marketId: string): void {
+    this.server.to(MARKET_ROOM(String(marketId))).emit('call_created', { callId, marketId });
+  }
+
+  emitStakeAdded(marketId: string, stakeData: Record<string, unknown>): void {
+    this.server.to(MARKET_ROOM(marketId)).emit('stake_added', { marketId, ...stakeData });
+  }
+
+  emitOutcomeResolved(marketId: string, callId: string, outcome: unknown): void {
+    this.server.to(MARKET_ROOM(marketId)).emit('outcome_resolved', { marketId, callId, outcome });
+  }
 }
