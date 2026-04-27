@@ -117,11 +117,12 @@ describe('CallsService', () => {
       mockCallRepository.findOne.mockResolvedValue(mockCall);
       mockCallRepository.save.mockResolvedValue(mockCall);
 
-      const result = await service.report(50, 'Spam');
+      const result = await service.report(50, 'Spam', '0xReporter');
 
       expect(repository.save).toHaveBeenCalledWith({
         ...mockCall,
         reportCount: 3,
+        lastReporterWallet: '0xReporter',
       });
       expect(result).toEqual({
         success: true,
@@ -134,19 +135,20 @@ describe('CallsService', () => {
       mockCallRepository.findOne.mockResolvedValue(mockCall);
       mockCallRepository.save.mockResolvedValue(mockCall);
 
-      await service.report(50, 'Offensive');
+      await service.report(50, 'Offensive', '0xReporter2');
 
       expect(repository.save).toHaveBeenCalledWith({
         ...mockCall,
         reportCount: 5,
         isHidden: true,
+        lastReporterWallet: '0xReporter2',
       });
     });
 
     it('should throw when the reported call does not exist', async () => {
       mockCallRepository.findOne.mockResolvedValue(null);
 
-      await expect(service.report(999, 'Spam')).rejects.toBeInstanceOf(
+      await expect(service.report(999, 'Spam', '0xReporter')).rejects.toBeInstanceOf(
         NotFoundException,
       );
     });
