@@ -6,7 +6,3 @@ members = [
     "outcome_manager",
       "governance"
 ]
-
-[dev-dependencies]
-proptest = "1.4.0"
-soroban-sdk = { version = "20.0.0", features = ["testutils"] }
