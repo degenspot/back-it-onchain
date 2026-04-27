@@ -6,14 +6,15 @@ import {
   Param,
   Query,
   Request,
+  UseGuards,
   ServiceUnavailableException,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { CallsService } from './calls.service';
 import { Call } from './call.entity';
 import { AdminService } from '../admin/admin.service';
 import { CallsQueryDto } from './dto/calls-query.dto';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 
 @Controller('calls')
 export class CallsController {
@@ -43,17 +44,15 @@ export class CallsController {
     return this.callsService.findOne(+id);
   }
 
+  @UseGuards(JwtAuthGuard)
   @Post(':id/report')
   report(
     @Param('id') id: string,
     @Body('reason') reason: string,
     @Request() req: any,
   ) {
-    const wallet = req.user?.wallet || req.headers['x-user-wallet'];
-    if (!wallet) {
-      throw new UnauthorizedException('Unauthorized');
-    }
-    return this.callsService.report(+id, reason);
+    const wallet: string = req.user.wallet;
+    return this.callsService.report(+id, reason, wallet);
   }
 
   @Throttle({ default: { limit: 10, ttl: 1 * 60000 } })

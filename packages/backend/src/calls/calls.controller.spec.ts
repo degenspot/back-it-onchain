@@ -5,6 +5,10 @@ import { AdminService } from '../admin/admin.service';
 describe('CallsController', () => {
   const callsService = {
     findAll: jest.fn(),
+    report: jest.fn().mockResolvedValue({
+      success: true,
+      message: 'Report submitted successfully',
+    }),
   };
 
   const adminService = {
@@ -32,5 +36,16 @@ describe('CallsController', () => {
       limit: 25,
       offset: 5,
     });
+  });
+
+  it('should call report with reporter wallet from authenticated user', () => {
+    const req = { user: { wallet: '0xReporterWallet' } };
+    controller.report('1', 'spam', req as any);
+
+    expect(callsService.report).toHaveBeenCalledWith(
+      1,
+      'spam',
+      '0xReporterWallet',
+    );
   });
 });

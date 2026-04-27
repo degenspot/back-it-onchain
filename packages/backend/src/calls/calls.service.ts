@@ -83,6 +83,7 @@ export class CallsService {
   async report(
     id: number,
     reason: string,
+    reporterWallet: string,
   ): Promise<{ success: boolean; message: string }> {
     const call = await this.callsRepository.findOne({ where: { id } });
     if (!call) {
@@ -90,6 +91,7 @@ export class CallsService {
     }
 
     call.reportCount += 1;
+    call.lastReporterWallet = reporterWallet;
     if (call.reportCount >= 5) {
       call.isHidden = true;
     }
@@ -97,7 +99,7 @@ export class CallsService {
     await this.callsRepository.save(call);
 
     console.log(
-      `[Report Received] Call ID: ${id} | Reason: ${reason} | Report Count: ${call.reportCount}`,
+      `[Report Received] Call ID: ${id} | Reason: ${reason} | Reporter: ${reporterWallet} | Report Count: ${call.reportCount}`,
     );
     return { success: true, message: 'Report submitted successfully' };
   }

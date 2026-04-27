@@ -12,7 +12,6 @@ export class CustomThrottlerGuard extends ThrottlerGuard {
     const tracker =
       req.user?.id ||
       req.user?.wallet ||
-      req.headers['x-user-wallet'] ||
       req.ip;
     return `${throttlerName}:${tracker}`;
   }
@@ -20,7 +19,7 @@ export class CustomThrottlerGuard extends ThrottlerGuard {
   // Fallback for older throttler versions or specific internal uses
   protected async getTracker(req: Record<string, any>): Promise<string> {
     return (
-      req.user?.id || req.user?.wallet || req.headers['x-user-wallet'] || req.ip
+      req.user?.id || req.user?.wallet || req.ip
     );
   }
 }
