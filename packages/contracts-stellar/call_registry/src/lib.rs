@@ -3,6 +3,11 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, token, Address, BytesN, Env, String, Symbol, Vec,
 };
 
+/// Maximum number of outcomes per market.
+const MAX_OUTCOMES: u32 = 32;
+/// Minimum number of outcomes per market (binary = 2).
+const MIN_OUTCOMES: u32 = 2;
+
 // ── TTL constants (issue #169) ────────────────────────────────────────────────
 /// Approximate ledger count for 1 year (≈ 6 s per ledger, 365.25 days).
 const LEDGERS_PER_YEAR: u32 = 5_259_600;
@@ -29,15 +34,19 @@ mod vault {
 pub struct Call {
     pub creator: Address,
     pub stake_token: Address,
-    pub total_stake_yes: i128,
-    pub total_stake_no: i128,
+    /// Pool balance for each outcome. Index 0 = first outcome, etc.
+    /// For binary markets: outcome_pools[0] = YES, outcome_pools[1] = NO.
+    /// Length is set at creation time via `num_outcomes`.
+    pub outcome_pools: Vec<i128>,
     pub start_ts: u64,
     pub end_ts: u64,
     pub token_address: Address,
     pub pair_id: BytesN<32>,
     pub ipfs_cid: String,
     pub settled: bool,
-    pub outcome: bool,
+    /// Index of the winning outcome after settlement.
+    /// `u32::MAX` means no outcome has been set yet.
+    pub winning_outcome: u32,
     pub final_price: i128,
     /// Total funds currently deposited in the vault for this call.
     pub vault_balance: i128,
@@ -51,6 +60,8 @@ pub struct CreateCallMetadata {
     pub token_address: Address,
     pub pair_id: BytesN<32>,
     pub ipfs_cid: String,
+    /// Number of outcomes for this market (2 = binary, >2 = categorical/scalar).
+    pub num_outcomes: u32,
 }
 
 // ── Token whitelisting types (issue #170) ─────────────────────────────────────
@@ -69,7 +80,8 @@ pub struct TokenProposal {
 pub enum DataKey {
     Call(u64),
     NextCallId,
-    UserStake(u64, Address, bool),
+    /// User stake: (call_id, user_address, outcome_index)
+    UserStake(u64, Address, u32),
     Admin,
     IsPaused,
     /// Optional vault contract address (set by admin).
@@ -388,6 +400,7 @@ impl CallRegistry {
 
     /// Create a new prediction call.
     /// Stakes are deposited into the vault (if configured) to earn yield.
+    /// `num_outcomes` defines how many outcome pools the market has (2 = binary).
     pub fn create_call(
         env: Env,
         creator: Address,
@@ -406,6 +419,12 @@ impl CallRegistry {
         }
         if stake_amount <= 0 {
             panic!("Stake amount must be > 0");
+        }
+        if metadata.num_outcomes < MIN_OUTCOMES {
+            panic!("Must have at least 2 outcomes");
+        }
+        if metadata.num_outcomes > MAX_OUTCOMES {
+            panic!("Too many outcomes");
         }
 
         // Transfer stake from creator to contract
@@ -426,18 +445,27 @@ impl CallRegistry {
 
         let start_ts = env.ledger().timestamp();
 
+        // Build outcome pools: creator stakes on outcome 0 by default
+        let mut outcome_pools = Vec::new(&env);
+        for i in 0..metadata.num_outcomes {
+            if i == 0 {
+                outcome_pools.push_back(stake_amount);
+            } else {
+                outcome_pools.push_back(0i128);
+            }
+        }
+
         let call = Call {
             creator: creator.clone(),
             stake_token: stake_token.clone(),
-            total_stake_yes: stake_amount,
-            total_stake_no: 0,
+            outcome_pools,
             start_ts,
             end_ts,
             token_address: metadata.token_address.clone(),
             pair_id: metadata.pair_id.clone(),
             ipfs_cid: metadata.ipfs_cid.clone(),
             settled: false,
-            outcome: false,
+            winning_outcome: u32::MAX,
             final_price: 0,
             vault_balance: stake_amount,
             participant_count: 1,
@@ -451,7 +479,7 @@ impl CallRegistry {
         let call_key = DataKey::Call(call_id);
         bump_persistent_ttl(&env, &call_key);
 
-        let creator_stake_key = DataKey::UserStake(call_id, creator.clone(), true);
+        let creator_stake_key = DataKey::UserStake(call_id, creator.clone(), 0u32);
         env.storage()
             .persistent()
             .set(&creator_stake_key, &stake_amount);
@@ -467,6 +495,7 @@ impl CallRegistry {
                 metadata.token_address,
                 metadata.pair_id,
                 metadata.ipfs_cid,
+                metadata.num_outcomes,
             ),
         );
 
@@ -476,7 +505,14 @@ impl CallRegistry {
     /// Stake on an existing call.
     /// Applies a dynamic surge fee based on participant count (issue #161).
     /// Net stake (after fee) is deposited into the vault (issue #159).
-    pub fn stake_on_call(env: Env, call_id: u64, staker: Address, amount: i128, position: bool) {
+    /// `outcome_index` is the 0-based index of the outcome pool to stake on.
+    pub fn stake_on_call(
+        env: Env,
+        call_id: u64,
+        staker: Address,
+        amount: i128,
+        outcome_index: u32,
+    ) {
         Self::assert_not_paused(&env);
         staker.require_auth();
 
@@ -495,6 +531,9 @@ impl CallRegistry {
         }
         if amount <= 0 {
             panic!("Amount must be > 0");
+        }
+        if outcome_index >= call.outcome_pools.len() as u32 {
+            panic!("Invalid outcome index");
         }
 
         // Transfer full amount from staker to contract
@@ -521,19 +560,17 @@ impl CallRegistry {
         // Deposit net stake into vault (issue #159)
         Self::vault_deposit(&env, &call.stake_token, net_amount);
 
-        // Update totals with net amount
-        if position {
-            call.total_stake_yes += net_amount;
-        } else {
-            call.total_stake_no += net_amount;
-        }
+        // Update the targeted outcome pool
+        let current_pool = call.outcome_pools.get(outcome_index as usize).unwrap();
+        call.outcome_pools
+            .set(outcome_index as usize, current_pool + net_amount);
         call.vault_balance += net_amount;
         call.participant_count += 1;
         env.storage().persistent().set(&key, &call);
         // Bump TTL on every stake interaction (issue #169)
         bump_persistent_ttl(&env, &key);
 
-        let stake_key = DataKey::UserStake(call_id, staker.clone(), position);
+        let stake_key = DataKey::UserStake(call_id, staker.clone(), outcome_index);
         let current_stake: i128 = env.storage().persistent().get(&stake_key).unwrap_or(0);
         env.storage()
             .persistent()
@@ -542,13 +579,14 @@ impl CallRegistry {
 
         env.events().publish(
             (Symbol::new(&env, "StakeAdded"), call_id, staker),
-            (position, net_amount, fee, fee_bps),
+            (outcome_index, net_amount, fee, fee_bps),
         );
     }
 
     /// Withdraw payout for a settled call.
     /// Withdraws principal from vault before transferring to winner (issue #159).
-    pub fn withdraw_payout(env: Env, call_id: u64, user: Address, position: bool) {
+    /// `outcome_index` is the outcome the user staked on.
+    pub fn withdraw_payout(env: Env, call_id: u64, user: Address, outcome_index: u32) {
         user.require_auth();
 
         let key = DataKey::Call(call_id);
@@ -561,11 +599,11 @@ impl CallRegistry {
         if !call.settled {
             panic!("Call not settled");
         }
-        if call.outcome != position {
+        if call.winning_outcome != outcome_index {
             panic!("Not on winning side");
         }
 
-        let stake_key = DataKey::UserStake(call_id, user.clone(), position);
+        let stake_key = DataKey::UserStake(call_id, user.clone(), outcome_index);
         let user_stake: i128 = env
             .storage()
             .persistent()
@@ -576,16 +614,15 @@ impl CallRegistry {
             panic!("Nothing to withdraw");
         }
 
-        let winners_pool = if position {
-            call.total_stake_yes
-        } else {
-            call.total_stake_no
-        };
-        let losers_pool = if position {
-            call.total_stake_no
-        } else {
-            call.total_stake_yes
-        };
+        let winners_pool = call.outcome_pools.get(outcome_index as usize).unwrap();
+
+        // Sum all losing pools
+        let mut losers_pool: i128 = 0;
+        for i in 0..call.outcome_pools.len() {
+            if i as u32 != outcome_index {
+                losers_pool += call.outcome_pools.get(i).unwrap();
+            }
+        }
 
         // Proportional share of losers pool
         let payout = user_stake + (user_stake * losers_pool / winners_pool);
@@ -612,6 +649,7 @@ impl CallRegistry {
     /// Allow a user to sell their position back to the pool before the end time
     /// at a discount. The user receives 80% of their stake back, and the remaining
     /// 20% stays in the pool for other winners.
+    /// Automatically detects which outcome the user has staked on.
     pub fn exit_early(env: Env, call_id: u64, user: Address) {
         Self::assert_not_paused(&env);
         user.require_auth();
@@ -631,21 +669,22 @@ impl CallRegistry {
             panic!("Call settled");
         }
 
-        // Determine which side the user has a stake on.
-        // A user can only exit one side per call (they cannot be on both sides
-        // simultaneously in this design — we check YES first, then NO).
-        let yes_stake_key = DataKey::UserStake(call_id, user.clone(), true);
-        let no_stake_key = DataKey::UserStake(call_id, user.clone(), false);
+        // Find which outcome the user has staked on.
+        let mut found_outcome: Option<u32> = None;
+        let mut user_stake: i128 = 0;
+        for i in 0..call.outcome_pools.len() {
+            let stake_key = DataKey::UserStake(call_id, user.clone(), i as u32);
+            let stake: i128 = env.storage().persistent().get(&stake_key).unwrap_or(0);
+            if stake > 0 {
+                found_outcome = Some(i as u32);
+                user_stake = stake;
+                break;
+            }
+        }
 
-        let yes_stake: i128 = env.storage().persistent().get(&yes_stake_key).unwrap_or(0);
-        let no_stake: i128 = env.storage().persistent().get(&no_stake_key).unwrap_or(0);
-
-        let (position, user_stake) = if yes_stake > 0 {
-            (true, yes_stake)
-        } else if no_stake > 0 {
-            (false, no_stake)
-        } else {
-            panic!("No stake found");
+        let outcome_index = match found_outcome {
+            Some(idx) => idx,
+            None => panic!("No stake found"),
         };
 
         // Calculate payout: 80% returned to user, 20% stays in pool
@@ -658,21 +697,36 @@ impl CallRegistry {
         }
         call.vault_balance -= refund;
 
-        // Reduce the side total by the full user stake. The `remaining` portion
-        // effectively redistributes to the winning side during settlement.
-        if position {
-            call.total_stake_yes -= user_stake;
-        } else {
-            call.total_stake_no -= user_stake;
-        }
+        // Reduce the outcome pool by the full user stake.
+        let current_pool = call.outcome_pools.get(outcome_index as usize).unwrap();
+        call.outcome_pools
+            .set(outcome_index as usize, current_pool - user_stake);
 
-        // Track the 20% penalty as additional pool funds for the *opposite* side.
-        // This makes the remaining funds available to winners on the other side.
+        // Distribute the 20% penalty across all OTHER outcome pools proportionally.
         if remaining > 0 {
-            if position {
-                call.total_stake_no += remaining;
+            let mut other_total: i128 = 0;
+            for i in 0..call.outcome_pools.len() {
+                if i as u32 != outcome_index {
+                    other_total += call.outcome_pools.get(i).unwrap();
+                }
+            }
+            if other_total > 0 {
+                for i in 0..call.outcome_pools.len() {
+                    if i as u32 != outcome_index {
+                        let pool = call.outcome_pools.get(i).unwrap();
+                        let share = remaining * pool / other_total;
+                        call.outcome_pools.set(i, pool + share);
+                    }
+                }
             } else {
-                call.total_stake_yes += remaining;
+                // No other pools have stakes — distribute evenly
+                let per_pool = remaining / (call.outcome_pools.len() as i128 - 1);
+                for i in 0..call.outcome_pools.len() {
+                    if i as u32 != outcome_index {
+                        let pool = call.outcome_pools.get(i).unwrap();
+                        call.outcome_pools.set(i, pool + per_pool);
+                    }
+                }
             }
         }
 
@@ -680,7 +734,7 @@ impl CallRegistry {
         bump_persistent_ttl(&env, &key);
 
         // Remove the user's stake entry
-        let stake_key = DataKey::UserStake(call_id, user.clone(), position);
+        let stake_key = DataKey::UserStake(call_id, user.clone(), outcome_index);
         env.storage().persistent().remove(&stake_key);
 
         // Transfer refund to user
@@ -691,7 +745,7 @@ impl CallRegistry {
 
         env.events().publish(
             (Symbol::new(&env, "EarlyExit"), call_id, user),
-            (position, user_stake, refund, remaining),
+            (outcome_index, user_stake, refund, remaining),
         );
     }
 
@@ -771,11 +825,12 @@ impl CallRegistry {
 
     // ── Finalize ──────────────────────────────────────────────────────────────
 
-    /// Finalize a call. Deducts a gas fee from the losers' pool.
+    /// Finalize a call. Deducts a gas fee from the losers' pools.
+    /// `winning_outcome` is the 0-based index of the winning outcome.
     pub fn finalize_call(
         env: Env,
         call_id: u64,
-        outcome: bool,
+        winning_outcome: u32,
         final_price: i128,
         caller: Address,
     ) {
@@ -794,12 +849,17 @@ impl CallRegistry {
         if env.ledger().timestamp() < call.end_ts {
             panic!("Call has not ended yet");
         }
+        if winning_outcome >= call.outcome_pools.len() as u32 {
+            panic!("Invalid winning outcome");
+        }
 
-        let losers_pool = if outcome {
-            call.total_stake_no
-        } else {
-            call.total_stake_yes
-        };
+        // Sum all losing pools
+        let mut losers_pool: i128 = 0;
+        for i in 0..call.outcome_pools.len() {
+            if i as u32 != winning_outcome {
+                losers_pool += call.outcome_pools.get(i).unwrap();
+            }
+        }
 
         let gas_fee = losers_pool * 5 / 1000;
 
@@ -812,13 +872,13 @@ impl CallRegistry {
         }
 
         call.settled = true;
-        call.outcome = outcome;
+        call.winning_outcome = winning_outcome;
         call.final_price = final_price;
         env.storage().persistent().set(&key, &call);
 
         env.events().publish(
             (Symbol::new(&env, "CallFinalized"), call_id, caller),
-            (outcome, final_price, gas_fee),
+            (winning_outcome, final_price, gas_fee),
         );
     }
 
@@ -831,10 +891,10 @@ impl CallRegistry {
             .expect("Call does not exist")
     }
 
-    pub fn get_user_stake(env: Env, call_id: u64, user: Address, position: bool) -> i128 {
+    pub fn get_user_stake(env: Env, call_id: u64, user: Address, outcome_index: u32) -> i128 {
         env.storage()
             .persistent()
-            .get(&DataKey::UserStake(call_id, user, position))
+            .get(&DataKey::UserStake(call_id, user, outcome_index))
             .unwrap_or(0)
     }
 
