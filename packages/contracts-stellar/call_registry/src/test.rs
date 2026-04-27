@@ -11,6 +11,7 @@ fn default_metadata(env: &Env) -> CreateCallMetadata {
         token_address: Address::generate(env),
         pair_id: BytesN::from_array(env, &[0; 32]),
         ipfs_cid: String::from_str(env, "QmHash"),
+        num_outcomes: 2, // binary market
     }
 }
 
@@ -48,11 +49,12 @@ fn test_create_call() {
     assert_eq!(call_id, 0);
     let call = client.get_call(&call_id);
     assert_eq!(call.creator, creator);
-    assert_eq!(call.total_stake_yes, 100);
-    assert_eq!(call.total_stake_no, 0);
+    assert_eq!(call.outcome_pools.len(), 2);
+    assert_eq!(call.outcome_pools.get(0).unwrap(), 100);
+    assert_eq!(call.outcome_pools.get(1).unwrap(), 0);
     assert_eq!(call.participant_count, 1);
 
-    let stake = client.get_user_stake(&call_id, &creator, &true);
+    let stake = client.get_user_stake(&call_id, &creator, &0u32);
     assert_eq!(stake, 100);
 
     assert_eq!(stake_token_client.balance(&creator), 900);
@@ -94,12 +96,12 @@ fn test_stake_on_call() {
         &default_metadata(&env),
     );
 
-    client.stake_on_call(&call_id, &staker, &1000, &false);
+    client.stake_on_call(&call_id, &staker, &1000, &1u32);
 
     let call = client.get_call(&call_id);
-    assert_eq!(call.total_stake_yes, 100);
+    assert_eq!(call.outcome_pools.get(0).unwrap(), 100);
     // 50 bp fee on 1000 = 5; net = 995
-    assert_eq!(call.total_stake_no, 995);
+    assert_eq!(call.outcome_pools.get(1).unwrap(), 995);
     assert_eq!(call.participant_count, 2);
 }
 
@@ -155,7 +157,7 @@ fn test_stake_ended_call() {
         &default_metadata(&env),
     );
     env.ledger().set_timestamp(end_ts + 1);
-    client.stake_on_call(&call_id, &staker, &50, &false);
+    client.stake_on_call(&call_id, &staker, &50, &1u32);
 }
 
 #[test]
@@ -214,7 +216,7 @@ fn test_pause_unpause_flow() {
     client.unpause();
     assert!(!client.get_is_paused());
 
-    client.stake_on_call(&call_id, &staker, &50, &false);
+    client.stake_on_call(&call_id, &staker, &50, &1u32);
 }
 
 #[test]
@@ -335,10 +337,10 @@ fn test_stake_applies_surge_fee() {
     );
 
     // participant_count = 1 → fee_bps = 50; stake 10_000 → fee = 50, net = 9_950
-    client.stake_on_call(&call_id, &staker, &10_000, &false);
+    client.stake_on_call(&call_id, &staker, &10_000, &1u32);
 
     let call = client.get_call(&call_id);
-    assert_eq!(call.total_stake_no, 9_950);
+    assert_eq!(call.outcome_pools.get(1).unwrap(), 9_950);
     assert_eq!(call.participant_count, 2);
 
     // Platform fees should have accumulated
@@ -408,7 +410,7 @@ fn test_distribute_dividends() {
     );
 
     // Stake to generate fees: 10_000 * 50bp / 10_000 = 50 fee
-    client.stake_on_call(&call_id, &staker, &10_000, &false);
+    client.stake_on_call(&call_id, &staker, &10_000, &1u32);
     assert_eq!(client.get_platform_fees(), 50);
 
     let holder_a = Address::generate(&env);
@@ -598,7 +600,7 @@ fn test_archive_settled_call() {
 
     // Advance time and finalize
     env.ledger().set_timestamp(end_ts + 1);
-    client.finalize_call(&call_id, &true, &1000i128, &creator);
+    client.finalize_call(&call_id, &0u32, &1000i128, &creator);
 
     let call = client.get_call(&call_id);
     assert!(call.settled);
@@ -635,4 +637,692 @@ fn test_archive_unsettled_call_panics() {
     );
 
     client.archive_call(&call_id);
+}
+
+// ── Early Exit (Hedging / Position Closing) ────────────────────────────────────
+
+#[test]
+fn test_exit_early_yes_position() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_client = token::Client::new(&env, &stake_token);
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+
+    stake_token_admin_client.mint(&creator, &1000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &default_metadata(&env),
+    );
+
+    // Creator exits early from YES position: stake = 100
+    // Refund = 100 * 80 / 100 = 80
+    // Remaining in pool = 20 (goes to NO side)
+    client.exit_early(&call_id, &creator);
+
+    // User should have received 80 back (started with 1000, paid 100, got 80 back = 980)
+    assert_eq!(stake_token_client.balance(&creator), 980);
+
+    // Contract should hold 20 (the penalty)
+    assert_eq!(stake_token_client.balance(&contract_id), 20);
+
+    // Call totals: outcome 0 = 0 (full stake removed), outcome 1 = 20 (penalty added)
+    let call = client.get_call(&call_id);
+    assert_eq!(call.outcome_pools.get(0).unwrap(), 0);
+    assert_eq!(call.outcome_pools.get(1).unwrap(), 20);
+    assert_eq!(call.vault_balance, 20);
+
+    // User stake should be removed
+    assert_eq!(client.get_user_stake(&call_id, &creator, &0u32), 0);
+}
+
+#[test]
+fn test_exit_early_no_position() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(&env);
+    let staker = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_client = token::Client::new(&env, &stake_token);
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+
+    stake_token_admin_client.mint(&creator, &10_000);
+    stake_token_admin_client.mint(&staker, &10_000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &default_metadata(&env),
+    );
+
+    // Staker stakes 1000 on outcome 1 (net after 50bp fee = 995)
+    client.stake_on_call(&call_id, &staker, &1000, &1u32);
+
+    // Staker exits early from outcome 1: stake = 995
+    // Refund = 995 * 80 / 100 = 796
+    // Remaining = 995 - 796 = 199 (goes to outcome 0 side)
+    let staker_balance_before = stake_token_client.balance(&staker);
+    client.exit_early(&call_id, &staker);
+    let staker_balance_after = stake_token_client.balance(&staker);
+
+    assert_eq!(staker_balance_after - staker_balance_before, 796);
+
+    // Call totals: outcome 0 = 100 + 199 (penalty), outcome 1 = 0 (full stake removed)
+    let call = client.get_call(&call_id);
+    assert_eq!(call.outcome_pools.get(0).unwrap(), 299); // 100 original + 199 penalty
+    assert_eq!(call.outcome_pools.get(1).unwrap(), 0);
+
+    // User stake should be removed
+    assert_eq!(client.get_user_stake(&call_id, &staker, &1u32), 0);
+}
+
+#[test]
+#[should_panic(expected = "No stake found")]
+fn test_exit_early_no_stake() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(&env);
+    let rando = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+
+    stake_token_admin_client.mint(&creator, &1000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &default_metadata(&env),
+    );
+
+    // rando has no stake — should panic
+    client.exit_early(&call_id, &rando);
+}
+
+#[test]
+#[should_panic(expected = "Call ended")]
+fn test_exit_early_after_end_time() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+
+    stake_token_admin_client.mint(&creator, &1000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 100;
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &default_metadata(&env),
+    );
+
+    // Advance time past end
+    env.ledger().set_timestamp(end_ts + 1);
+    client.exit_early(&call_id, &creator);
+}
+
+#[test]
+#[should_panic(expected = "Call settled")]
+fn test_exit_early_after_settled() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+
+    stake_token_admin_client.mint(&creator, &1000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 100;
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &default_metadata(&env),
+    );
+
+    // Finalize the call
+    env.ledger().set_timestamp(end_ts + 1);
+    client.finalize_call(&call_id, &0u32, &1000i128, &creator);
+
+    // Try to exit early — should panic
+    client.exit_early(&call_id, &creator);
+}
+
+#[test]
+fn test_exit_early_event_emitted() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+
+    stake_token_admin_client.mint(&creator, &1000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &default_metadata(&env),
+    );
+
+    client.exit_early(&call_id, &creator);
+
+    // Verify the EarlyExit event was emitted
+    let events = env.events().all();
+    let last_event = events.last().unwrap();
+    let symbol: Symbol = last_event.1.get(0).unwrap().into_val(&env);
+    assert_eq!(symbol, Symbol::new(&env, "EarlyExit"));
+}
+
+#[test]
+fn test_exit_early_multiple_stakers() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(&env);
+    let staker_yes = Address::generate(&env);
+    let staker_no = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_client = token::Client::new(&env, &stake_token);
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+
+    stake_token_admin_client.mint(&creator, &10_000);
+    stake_token_admin_client.mint(&staker_yes, &10_000);
+    stake_token_admin_client.mint(&staker_no, &10_000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    // Creator stakes 100 on YES
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &default_metadata(&env),
+    );
+
+    // staker_yes stakes 200 on outcome 0 (net after 50bp fee with participant_count=1: 200 - 1 = 199)
+    client.stake_on_call(&call_id, &staker_yes, &200, &0u32);
+
+    // staker_no stakes 500 on outcome 1 (net after 50bp fee with participant_count=2: 500 - 2 = 498)
+    client.stake_on_call(&call_id, &staker_no, &500, &1u32);
+
+    // Verify initial state
+    let call = client.get_call(&call_id);
+    // outcome 0: 100 (creator) + 199 (staker_yes net) = 299
+    assert_eq!(call.outcome_pools.get(0).unwrap(), 299);
+    // outcome 1: 498 (staker_no net)
+    assert_eq!(call.outcome_pools.get(1).unwrap(), 498);
+
+    // staker_no exits early from outcome 1: stake = 498
+    // Refund = 498 * 80 / 100 = 398
+    // Remaining = 498 - 398 = 100 (goes to outcome 0 side)
+    let staker_no_balance_before = stake_token_client.balance(&staker_no);
+    client.exit_early(&call_id, &staker_no);
+    let staker_no_balance_after = stake_token_client.balance(&staker_no);
+    assert_eq!(staker_no_balance_after - staker_no_balance_before, 398);
+
+    // After exit: outcome 0 = 299 + 100 (penalty from outcome 1) = 399, outcome 1 = 0
+    let call = client.get_call(&call_id);
+    assert_eq!(call.outcome_pools.get(0).unwrap(), 399);
+    assert_eq!(call.outcome_pools.get(1).unwrap(), 0);
+
+    // Creator and staker_yes still have their stakes
+    assert_eq!(client.get_user_stake(&call_id, &creator, &0u32), 100);
+    assert_eq!(client.get_user_stake(&call_id, &staker_yes, &0u32), 199);
+}
+
+#[test]
+#[should_panic(expected = "Contract is paused")]
+fn test_exit_early_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+
+    stake_token_admin_client.mint(&creator, &1000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &default_metadata(&env),
+    );
+
+    client.pause();
+    client.exit_early(&call_id, &creator);
+}
+
+// ── Multi-Outcome Markets (Scalar/Categorical) ─────────────────────────────────
+
+fn multi_metadata(env: &Env, num_outcomes: u32) -> CreateCallMetadata {
+    CreateCallMetadata {
+        token_address: Address::generate(env),
+        pair_id: BytesN::from_array(env, &[0; 32]),
+        ipfs_cid: String::from_str(env, "QmHash"),
+        num_outcomes,
+    }
+}
+
+#[test]
+fn test_create_multi_outcome_call() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+
+    stake_token_admin_client.mint(&creator, &10_000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+
+    // Create a 4-outcome market
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &multi_metadata(&env, 4),
+    );
+
+    let call = client.get_call(&call_id);
+    assert_eq!(call.outcome_pools.len(), 4);
+    assert_eq!(call.outcome_pools.get(0).unwrap(), 100); // creator stakes on outcome 0
+    assert_eq!(call.outcome_pools.get(1).unwrap(), 0);
+    assert_eq!(call.outcome_pools.get(2).unwrap(), 0);
+    assert_eq!(call.outcome_pools.get(3).unwrap(), 0);
+    assert_eq!(call.winning_outcome, u32::MAX); // not settled yet
+}
+
+#[test]
+fn test_stake_on_multi_outcome() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(&env);
+    let staker_a = Address::generate(&env);
+    let staker_b = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+
+    stake_token_admin_client.mint(&creator, &10_000);
+    stake_token_admin_client.mint(&staker_a, &10_000);
+    stake_token_admin_client.mint(&staker_b, &10_000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &multi_metadata(&env, 3),
+    );
+
+    // staker_a stakes on outcome 1 (50bp fee on 1000 = 5; net = 995)
+    client.stake_on_call(&call_id, &staker_a, &1000, &1u32);
+    // staker_b stakes on outcome 2 (50bp fee on 500 = 2; net = 498)
+    client.stake_on_call(&call_id, &staker_b, &500, &2u32);
+
+    let call = client.get_call(&call_id);
+    assert_eq!(call.outcome_pools.get(0).unwrap(), 100); // creator
+    assert_eq!(call.outcome_pools.get(1).unwrap(), 995); // staker_a net
+    assert_eq!(call.outcome_pools.get(2).unwrap(), 498); // staker_b net
+    assert_eq!(call.participant_count, 3);
+
+    // Verify individual stakes
+    assert_eq!(client.get_user_stake(&call_id, &creator, &0u32), 100);
+    assert_eq!(client.get_user_stake(&call_id, &staker_a, &1u32), 995);
+    assert_eq!(client.get_user_stake(&call_id, &staker_b, &2u32), 498);
+}
+
+#[test]
+fn test_finalize_multi_outcome() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(&env);
+    let staker_a = Address::generate(&env);
+    let staker_b = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+
+    stake_token_admin_client.mint(&creator, &10_000);
+    stake_token_admin_client.mint(&staker_a, &10_000);
+    stake_token_admin_client.mint(&staker_b, &10_000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 100;
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &multi_metadata(&env, 3),
+    );
+
+    client.stake_on_call(&call_id, &staker_a, &1000, &1u32);
+    client.stake_on_call(&call_id, &staker_b, &500, &2u32);
+
+    // Advance time and finalize with outcome 1 as winner
+    env.ledger().set_timestamp(end_ts + 1);
+    client.finalize_call(&call_id, &1u32, &2000i128, &creator);
+
+    let call = client.get_call(&call_id);
+    assert!(call.settled);
+    assert_eq!(call.winning_outcome, 1);
+    assert_eq!(call.final_price, 2000);
+}
+
+#[test]
+fn test_withdraw_multi_outcome() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(&env);
+    let staker_a = Address::generate(&env);
+    let staker_b = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_client = token::Client::new(&env, &stake_token);
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+
+    stake_token_admin_client.mint(&creator, &10_000);
+    stake_token_admin_client.mint(&staker_a, &10_000);
+    stake_token_admin_client.mint(&staker_b, &10_000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 100;
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &multi_metadata(&env, 3),
+    );
+
+    // staker_a on outcome 1 (net 995), staker_b on outcome 2 (net 498)
+    client.stake_on_call(&call_id, &staker_a, &1000, &1u32);
+    client.stake_on_call(&call_id, &staker_b, &500, &2u32);
+
+    // Finalize with outcome 1 as winner
+    env.ledger().set_timestamp(end_ts + 1);
+    client.finalize_call(&call_id, &1u32, &2000i128, &creator);
+
+    // staker_a withdraws — should get their stake + proportional share of losing pools
+    // Winners pool = 995, losers pool = 100 + 498 = 598
+    // Payout = 995 + (995 * 598 / 995) = 995 + 598 = 1593
+    let balance_before = stake_token_client.balance(&staker_a);
+    client.withdraw_payout(&call_id, &staker_a, &1u32);
+    let balance_after = stake_token_client.balance(&staker_a);
+    let payout = balance_after - balance_before;
+
+    // Expected: 995 (principal) + (995 * 598 / 995) = 995 + 598 = 1593
+    // But gas fee of 0.5% was deducted from losers pool (598 * 5/1000 = 2)
+    // So actual losers_pool after fee = 598 - 2 = 596
+    // Payout = 995 + (995 * 596 / 995) = 995 + 596 = 1591
+    assert_eq!(payout, 1591);
+}
+
+#[test]
+#[should_panic(expected = "Invalid outcome index")]
+fn test_stake_invalid_outcome_index() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(&env);
+    let staker = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+
+    stake_token_admin_client.mint(&creator, &10_000);
+    stake_token_admin_client.mint(&staker, &10_000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &multi_metadata(&env, 3),
+    );
+
+    // Outcome index 5 is out of bounds for a 3-outcome market
+    client.stake_on_call(&call_id, &staker, &100, &5u32);
+}
+
+#[test]
+#[should_panic(expected = "Must have at least 2 outcomes")]
+fn test_create_call_too_few_outcomes() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+
+    stake_token_admin_client.mint(&creator, &10_000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &multi_metadata(&env, 1),
+    );
+}
+
+#[test]
+#[should_panic(expected = "Too many outcomes")]
+fn test_create_call_too_many_outcomes() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+
+    stake_token_admin_client.mint(&creator, &10_000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &multi_metadata(&env, 33),
+    );
+}
+
+#[test]
+fn test_exit_early_multi_outcome() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(&env);
+    let staker_a = Address::generate(&env);
+    let staker_b = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_client = token::Client::new(&env, &stake_token);
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+
+    stake_token_admin_client.mint(&creator, &10_000);
+    stake_token_admin_client.mint(&staker_a, &10_000);
+    stake_token_admin_client.mint(&staker_b, &10_000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &multi_metadata(&env, 4),
+    );
+
+    // Stake on different outcomes
+    client.stake_on_call(&call_id, &staker_a, &1000, &1u32); // net 995
+    client.stake_on_call(&call_id, &staker_b, &500, &2u32); // net 498
+
+    // staker_a exits early from outcome 1
+    // stake = 995, refund = 995 * 80 / 100 = 796, remaining = 199
+    let balance_before = stake_token_client.balance(&staker_a);
+    client.exit_early(&call_id, &staker_a);
+    let balance_after = stake_token_client.balance(&staker_a);
+    assert_eq!(balance_after - balance_before, 796);
+
+    // Outcome 1 pool should be 0, penalty distributed to other pools proportionally
+    let call = client.get_call(&call_id);
+    assert_eq!(call.outcome_pools.get(1).unwrap(), 0);
+    // Other pools (0, 2, 3) should have the 199 penalty distributed proportionally
+    // outcome 0 = 100, outcome 2 = 498, outcome 3 = 0 → total other = 598
+    // outcome 0 gets: 100 + 199 * 100 / 598 = 100 + 33 = 133
+    // outcome 2 gets: 498 + 199 * 498 / 598 = 498 + 165 = 663
+    // outcome 3 gets: 0 (no existing stake, no share)
+    assert_eq!(call.outcome_pools.get(0).unwrap(), 133);
+    assert_eq!(call.outcome_pools.get(2).unwrap(), 663);
+    assert_eq!(call.outcome_pools.get(3).unwrap(), 0);
 }

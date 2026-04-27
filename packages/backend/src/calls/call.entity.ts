@@ -85,6 +85,10 @@ export class Call {
   @Column({ default: 0 })
   reportCount: number;
 
+  /** Wallet address of the most recent reporter (for abuse tracking). */
+  @Column({ nullable: true })
+  lastReporterWallet: string;
+
   @CreateDateColumn()
   createdAt: Date;
 

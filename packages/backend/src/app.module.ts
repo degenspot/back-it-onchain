@@ -9,6 +9,7 @@ import { AppService } from './app.service';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { CustomThrottlerGuard } from './common/guards/custom-throttler.guard';
+import { validationSchema } from './config/env.validation';
 
 import { User } from './users/user.entity';
 import { Call } from './calls/call.entity';
@@ -36,6 +37,11 @@ import { AdminModule } from './admin/admin.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      validationSchema,
+      validationOptions: {
+        allowUnknown: true,
+        abortEarly: false,
+      },
     }),
     CacheModule.registerAsync({
       isGlobal: true,

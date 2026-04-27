@@ -7,13 +7,13 @@ import {
   Query,
   Request,
   UseGuards,
-  HttpException,
-  HttpStatus,
 } from '@nestjs/common';
 import { NotificationsService } from './notifications.service';
 import { Notification } from './notification.entity';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 
 @Controller('notifications')
+@UseGuards(JwtAuthGuard)
 export class NotificationsController {
   constructor(private readonly notificationsService: NotificationsService) {}
 
@@ -28,11 +28,7 @@ export class NotificationsController {
     page: number;
     totalPages: number;
   }> {
-    const wallet = req.user?.wallet || req.headers['x-user-wallet'];
-
-    if (!wallet) {
-      throw new HttpException('Unauthorized', HttpStatus.UNAUTHORIZED);
-    }
+    const wallet: string = req.user.wallet;
 
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
@@ -42,11 +38,7 @@ export class NotificationsController {
 
   @Get('unread-count')
   async getUnreadCount(@Request() req: any): Promise<{ unreadCount: number }> {
-    const wallet = req.user?.wallet || req.headers['x-user-wallet'];
-
-    if (!wallet) {
-      throw new HttpException('Unauthorized', HttpStatus.UNAUTHORIZED);
-    }
+    const wallet: string = req.user.wallet;
 
     const unreadCount = await this.notificationsService.getUnreadCount(wallet);
     return { unreadCount };
@@ -57,22 +49,14 @@ export class NotificationsController {
     @Param('id') notificationId: string,
     @Request() req: any,
   ): Promise<Notification | null> {
-    const wallet = req.user?.wallet || req.headers['x-user-wallet'];
+    const wallet: string = req.user.wallet;
 
-    if (!wallet) {
-      throw new HttpException('Unauthorized', HttpStatus.UNAUTHORIZED);
-    }
-
-    return this.notificationsService.markAsRead(notificationId);
+    return this.notificationsService.markAsRead(notificationId, wallet);
   }
 
   @Patch('mark-all-read')
   async markAllAsRead(@Request() req: any): Promise<{ success: boolean }> {
-    const wallet = req.user?.wallet || req.headers['x-user-wallet'];
-
-    if (!wallet) {
-      throw new HttpException('Unauthorized', HttpStatus.UNAUTHORIZED);
-    }
+    const wallet: string = req.user.wallet;
 
     await this.notificationsService.markAllAsRead(wallet);
     return { success: true };
@@ -83,13 +67,9 @@ export class NotificationsController {
     @Param('id') notificationId: string,
     @Request() req: any,
   ): Promise<{ success: boolean }> {
-    const wallet = req.user?.wallet || req.headers['x-user-wallet'];
+    const wallet: string = req.user.wallet;
 
-    if (!wallet) {
-      throw new HttpException('Unauthorized', HttpStatus.UNAUTHORIZED);
-    }
-
-    await this.notificationsService.deleteNotification(notificationId);
+    await this.notificationsService.deleteNotification(notificationId, wallet);
     return { success: true };
   }
 }

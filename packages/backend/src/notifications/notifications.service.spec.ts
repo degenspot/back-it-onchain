@@ -245,24 +245,34 @@ describe('NotificationsService', () => {
   // -------------------------------------------------------------------------
   describe('markAsRead', () => {
     it('updates isRead to true and returns the notification', async () => {
+      const found = mockNotification();
       const updated = mockNotification({ isRead: true });
+      repo.findOne.mockResolvedValueOnce(found); // ownership check
       repo.update.mockResolvedValue({ affected: 1 });
-      repo.findOne.mockResolvedValue(updated);
+      repo.findOne.mockResolvedValueOnce(updated); // return value
 
-      const result = await service.markAsRead('uuid-1');
+      const result = await service.markAsRead('uuid-1', '0xUSER');
 
-      expect(repo.update).toHaveBeenCalledWith('uuid-1', { isRead: true });
       expect(repo.findOne).toHaveBeenCalledWith({ where: { id: 'uuid-1' } });
+      expect(repo.update).toHaveBeenCalledWith('uuid-1', { isRead: true });
       expect(result?.isRead).toBe(true);
     });
 
     it('returns null when notification does not exist', async () => {
-      repo.update.mockResolvedValue({ affected: 0 });
       repo.findOne.mockResolvedValue(null);
 
-      const result = await service.markAsRead('nonexistent');
+      const result = await service.markAsRead('nonexistent', '0xUSER');
 
       expect(result).toBeNull();
+    });
+
+    it('throws ForbiddenException when wallet does not match recipient', async () => {
+      const found = mockNotification({ recipientWallet: '0xOTHER' });
+      repo.findOne.mockResolvedValue(found);
+
+      await expect(service.markAsRead('uuid-1', '0xUSER')).rejects.toThrow(
+        'You can only modify your own notifications',
+      );
     });
   });
 
@@ -286,12 +296,31 @@ describe('NotificationsService', () => {
   // deleteNotification
   // -------------------------------------------------------------------------
   describe('deleteNotification', () => {
-    it('deletes a notification by id', async () => {
+    it('deletes a notification owned by the requesting wallet', async () => {
+      const found = mockNotification({ recipientWallet: '0xUSER' });
+      repo.findOne.mockResolvedValue(found);
       repo.delete.mockResolvedValue({ affected: 1 });
 
-      await service.deleteNotification('uuid-1');
+      await service.deleteNotification('uuid-1', '0xUSER');
 
       expect(repo.delete).toHaveBeenCalledWith('uuid-1');
+    });
+
+    it('does nothing when notification does not exist', async () => {
+      repo.findOne.mockResolvedValue(null);
+
+      await service.deleteNotification('nonexistent', '0xUSER');
+
+      expect(repo.delete).not.toHaveBeenCalled();
+    });
+
+    it('throws ForbiddenException when wallet does not match recipient', async () => {
+      const found = mockNotification({ recipientWallet: '0xOTHER' });
+      repo.findOne.mockResolvedValue(found);
+
+      await expect(
+        service.deleteNotification('uuid-1', '0xUSER'),
+      ).rejects.toThrow('You can only delete your own notifications');
     });
   });
 

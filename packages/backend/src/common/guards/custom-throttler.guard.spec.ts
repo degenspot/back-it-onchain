@@ -6,7 +6,7 @@
  *   - getTracker   → tracker string fallback chain
  *
  * Both methods share the same priority chain:
- *   req.user.id  >  req.user.wallet  >  x-user-wallet header  >  req.ip
+ *   req.user.id  >  req.user.wallet  >  req.ip
  */
 
 import { ExecutionContext } from '@nestjs/common';
@@ -52,7 +52,7 @@ describe('CustomThrottlerGuard.generateKey', () => {
   it('should prefer req.user.id as the tracker', () => {
     const ctx = buildContext({
       user: { id: 'user-123', wallet: '0xWallet' },
-      headers: { 'x-user-wallet': '0xHeader' },
+      headers: {},
       ip: '1.2.3.4',
     });
     const key = (guard as any).generateKey(ctx, 'tracker', 'throttlerName');
@@ -62,23 +62,14 @@ describe('CustomThrottlerGuard.generateKey', () => {
   it('should fall back to req.user.wallet when id is absent', () => {
     const ctx = buildContext({
       user: { wallet: '0xWallet' },
-      headers: { 'x-user-wallet': '0xHeader' },
+      headers: {},
       ip: '1.2.3.4',
     });
     const key = (guard as any).generateKey(ctx, 'tracker', 'throttlerName');
     expect(key).toBe('throttlerName:0xWallet');
   });
 
-  it('should fall back to x-user-wallet header when user is absent', () => {
-    const ctx = buildContext({
-      headers: { 'x-user-wallet': '0xHeaderWallet' },
-      ip: '1.2.3.4',
-    });
-    const key = (guard as any).generateKey(ctx, 'tracker', 'throttlerName');
-    expect(key).toBe('throttlerName:0xHeaderWallet');
-  });
-
-  it('should fall back to req.ip when no user or wallet header is present', () => {
+  it('should fall back to req.ip when user is absent', () => {
     const ctx = buildContext({ headers: {}, ip: '5.6.7.8' });
     const key = (guard as any).generateKey(ctx, 'tracker', 'throttlerName');
     expect(key).toBe('throttlerName:5.6.7.8');
@@ -127,7 +118,7 @@ describe('CustomThrottlerGuard.getTracker', () => {
   it('should return req.user.id when present', async () => {
     const req = {
       user: { id: 'uid-1', wallet: '0xW' },
-      headers: { 'x-user-wallet': '0xH' },
+      headers: {},
       ip: '0.0.0.1',
     };
     await expect((guard as any).getTracker(req)).resolves.toBe('uid-1');
@@ -136,20 +127,10 @@ describe('CustomThrottlerGuard.getTracker', () => {
   it('should return req.user.wallet when id is absent', async () => {
     const req = {
       user: { wallet: '0xWallet' },
-      headers: { 'x-user-wallet': '0xH' },
+      headers: {},
       ip: '0.0.0.2',
     };
     await expect((guard as any).getTracker(req)).resolves.toBe('0xWallet');
-  });
-
-  it('should return the x-user-wallet header when user is absent', async () => {
-    const req = {
-      headers: { 'x-user-wallet': '0xHeaderWallet' },
-      ip: '0.0.0.3',
-    };
-    await expect((guard as any).getTracker(req)).resolves.toBe(
-      '0xHeaderWallet',
-    );
   });
 
   it('should return req.ip as the final fallback', async () => {

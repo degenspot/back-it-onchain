@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan } from 'typeorm';
 import { Notification, NotificationType } from './notification.entity';
@@ -56,7 +56,21 @@ export class NotificationsService {
     });
   }
 
-  async markAsRead(notificationId: string): Promise<Notification | null> {
+  async markAsRead(
+    notificationId: string,
+    wallet: string,
+  ): Promise<Notification | null> {
+    const notification = await this.notificationsRepository.findOne({
+      where: { id: notificationId },
+    });
+    if (!notification) {
+      return null;
+    }
+    if (notification.recipientWallet !== wallet) {
+      throw new ForbiddenException(
+        'You can only modify your own notifications',
+      );
+    }
     await this.notificationsRepository.update(notificationId, { isRead: true });
     return this.notificationsRepository.findOne({
       where: { id: notificationId },
@@ -70,7 +84,21 @@ export class NotificationsService {
     );
   }
 
-  async deleteNotification(notificationId: string): Promise<void> {
+  async deleteNotification(
+    notificationId: string,
+    wallet: string,
+  ): Promise<void> {
+    const notification = await this.notificationsRepository.findOne({
+      where: { id: notificationId },
+    });
+    if (!notification) {
+      return;
+    }
+    if (notification.recipientWallet !== wallet) {
+      throw new ForbiddenException(
+        'You can only delete your own notifications',
+      );
+    }
     await this.notificationsRepository.delete(notificationId);
   }
 
