@@ -3,6 +3,7 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, Address, Bytes, BytesN, Env, Map,
     Symbol, Vec,
 };
+use governance::errors::ContractError;
 
 const OWNER: Symbol = symbol_short!("OWNER");
 const ORACLES: Symbol = symbol_short!("ORACLES");
@@ -18,6 +19,7 @@ const SLASHED_CALLS: Symbol = symbol_short!("SLSHCALL");
 const QUORUM_NUM: Symbol = symbol_short!("Q_NUM");
 const QUORUM_DEN: Symbol = symbol_short!("Q_DEN");
 const VOTES: Symbol = symbol_short!("VOTES");
+const CROSS_CHAIN_HASHES: Symbol = symbol_short!("CCHASH"); // Issue #234
 
 const BASIS_POINTS_DENOMINATOR: i128 = 10_000;
 
@@ -67,16 +69,36 @@ pub struct QuorumConfig {
     pub denominator: u32,
 }
 
+/// Cross-chain hash lock reference (Issue #234)
+/// Stores a hash posted on another chain (e.g., Base) that can be used
+/// to verify the outcome submitted on Soroban.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CrossChainReference {
+    /// The keccak256/SHA-256 hash of the outcome data posted on the other chain.
+    pub outcome_hash: BytesN<32>,
+    /// The chain ID where the hash was posted (e.g., 8453 for Base).
+    pub source_chain_id: u64,
+    /// The transaction hash on the source chain.
+    pub source_tx_hash: BytesN<32>,
+    /// Block number on the source chain.
+    pub source_block_number: u64,
+    /// Timestamp when the reference was created.
+    pub timestamp: u64,
+}
+
 #[contracttype]
 #[derive(Clone)]
 pub enum Event {
-    OutcomeSubmitted(u64, bool, u128, BytesN<32>),
-    OutcomeOverturned(u64, bool, u128),
-    CallSettled(u64, bool, u128),
-    PayoutWithdrawn(u64, Address, u128),
-    OracleUpdated(BytesN<32>, bool),
-    OracleBondDeposited(BytesN<32>, u128),
-    OracleBondSlashed(u64, BytesN<32>, u128, Address),
+    OutcomeSubmitted(u64, bool, u128, BytesN<32>, u32), // Added: total votes count
+    OutcomeOverturned(u64, bool, u128, u64),            // Added: call end_ts
+    CallSettled(u64, bool, u128, u64),                  // Added: total vote count
+    PayoutWithdrawn(u64, Address, u128, bool),          // Added: settlement outcome
+    OracleUpdated(BytesN<32>, bool, u32),               // Added: total oracle count
+    OracleBondDeposited(BytesN<32>, u128, u128),        // Added: total bond amount
+    OracleBondSlashed(u64, BytesN<32>, u128, Address, u128), // Added: remaining bond
+    CrossChainHashPosted(u64, BytesN<32>, u64),        // Issue #234: call_id, hash, chain_id
+    CrossChainVerified(u64, bool),                     // Issue #234: call_id, verified
 }
 
 #[contract]
@@ -99,7 +121,7 @@ impl OutcomeManagerContract {
 
     fn assert_not_paused(env: &Env) {
         if Self::is_paused(env) {
-            panic!("Contract is paused");
+            panic!("{:?}", ContractError::ContractPaused);
         }
     }
 
@@ -107,7 +129,7 @@ impl OutcomeManagerContract {
         env.storage()
             .persistent()
             .get(&FEE_CONFIG)
-            .expect("Fee config not set")
+            .unwrap_or_else(|| panic!("{:?}", ContractError::FeeConfigNotSet))
     }
 
     fn to_i128(value: u128) -> i128 {
@@ -122,7 +144,7 @@ impl OutcomeManagerContract {
         env.storage()
             .persistent()
             .get(&ORACLE_BOND_TOKEN)
-            .expect("Oracle bond token not set")
+            .unwrap_or_else(|| panic!("{:?}", ContractError::OracleBondTokenNotSet))
     }
 
     /// Count the total number of currently authorized oracles.
@@ -146,7 +168,7 @@ impl OutcomeManagerContract {
         let storage = env.storage().instance();
 
         if storage.has(&OWNER) {
-            panic!("Contract already initialized");
+            panic!("{:?}", ContractError::AlreadyInitialized);
         }
 
         storage.set(&OWNER, &owner);
@@ -180,6 +202,10 @@ impl OutcomeManagerContract {
         let votes: Map<u64, Vec<OracleVote>> = Map::new(&env);
         storage.set(&VOTES, &votes);
 
+        // Initialize cross-chain hash references (Issue #234)
+        let cross_chain_hashes: Map<u64, CrossChainReference> = Map::new(&env);
+        storage.set(&CROSS_CHAIN_HASHES, &cross_chain_hashes);
+
         // Initialize pause flag in persistent storage
         env.storage().persistent().set(&IS_PAUSED, &false);
 
@@ -200,7 +226,7 @@ impl OutcomeManagerContract {
         Self::require_owner_auth(&env);
 
         if basis_points > 10_000 {
-            panic!("Fee basis points cannot exceed 10000");
+            panic!("{:?}", ContractError::FeeBasisPointsExceeded);
         }
 
         env.storage().persistent().set(
@@ -230,10 +256,10 @@ impl OutcomeManagerContract {
     pub fn set_quorum_threshold(env: Env, numerator: u32, denominator: u32) {
         Self::require_owner_auth(&env);
         if denominator == 0 {
-            panic!("Denominator cannot be zero");
+            panic!("{:?}", ContractError::ZeroDenominator);
         }
         if numerator == 0 || numerator > denominator {
-            panic!("Numerator must be in range [1, denominator]");
+            panic!("{:?}", ContractError::InvalidQuorumNumerator);
         }
         env.storage().persistent().set(&QUORUM_NUM, &numerator);
         env.storage().persistent().set(&QUORUM_DEN, &denominator);
@@ -276,7 +302,11 @@ impl OutcomeManagerContract {
 
         env.events().publish(
             (Symbol::new(&env, "oracle_updated"),),
-            Event::OracleUpdated(oracle, authorized),
+            Event::OracleUpdated(
+                oracle,
+                authorized,
+                Self::count_authorized_oracles(&env), // Total oracle count
+            ),
         );
     }
 
@@ -284,14 +314,14 @@ impl OutcomeManagerContract {
         Self::assert_not_paused(&env);
 
         if amount == 0 {
-            panic!("Bond amount must be > 0");
+            panic!("{:?}", ContractError::InvalidAmount);
         }
 
         let storage = env.storage().instance();
         let oracles: Map<BytesN<32>, bool> =
             storage.get(&ORACLES).unwrap_or_else(|| Map::new(&env));
         if !oracles.get(oracle.clone()).unwrap_or(false) {
-            panic!("Oracle not authorized");
+            panic!("{:?}", ContractError::OracleNotAuthorized);
         }
 
         let owner = Self::owner_address(&env);
@@ -316,7 +346,11 @@ impl OutcomeManagerContract {
 
         env.events().publish(
             (Symbol::new(&env, "oracle_bond_deposited"),),
-            Event::OracleBondDeposited(oracle, amount),
+            Event::OracleBondDeposited(
+                oracle,
+                amount,
+                updated_bond, // New total bond amount
+            ),
         );
     }
 
@@ -357,10 +391,10 @@ impl OutcomeManagerContract {
 
         if let Some(call_data) = calls.get(call_id) {
             if call_data.settled {
-                panic!("Call already settled");
+                panic!("{:?}", ContractError::CallSettled);
             }
         } else {
-            panic!("Call not found");
+            panic!("{:?}", ContractError::CallNotFound);
         }
 
         // Construct message for signature verification
@@ -405,13 +439,13 @@ impl OutcomeManagerContract {
         let is_authorized = oracles.get(oracle_pubkey.clone()).unwrap_or(false);
 
         if !is_authorized {
-            panic!("Oracle not authorized");
+            panic!("{:?}", ContractError::OracleNotAuthorized);
         }
 
         let bonds: Map<BytesN<32>, u128> =
             storage.get(&ORACLE_BONDS).unwrap_or_else(|| Map::new(&env));
         if bonds.get(oracle_pubkey.clone()).unwrap_or(0) == 0 {
-            panic!("Oracle bond required");
+            panic!("{:?}", ContractError::OracleBondRequired);
         }
 
         // Load existing votes for this call
@@ -424,7 +458,7 @@ impl OutcomeManagerContract {
         for i in 0..call_votes.len() {
             let existing = call_votes.get(i).unwrap();
             if existing.oracle == oracle_pubkey {
-                panic!("Oracle already voted on this call");
+                panic!("{:?}", ContractError::OracleAlreadyVoted);
             }
         }
 
@@ -442,7 +476,13 @@ impl OutcomeManagerContract {
         // Emit per-oracle vote event
         env.events().publish(
             (Symbol::new(&env, "outcome_submitted"),),
-            Event::OutcomeSubmitted(call_id, outcome, final_price, oracle_pubkey.clone()),
+            Event::OutcomeSubmitted(
+                call_id,
+                outcome,
+                final_price,
+                oracle_pubkey.clone(),
+                call_votes.len(), // Total votes for this call
+            ),
         );
 
         // Check if quorum is met for this outcome
@@ -484,7 +524,12 @@ impl OutcomeManagerContract {
 
             env.events().publish(
                 (Symbol::new(&env, "call_settled"),),
-                Event::CallSettled(call_id, outcome, avg_price),
+                Event::CallSettled(
+                    call_id,
+                    outcome,
+                    avg_price,
+                    call_votes.len() as u64, // Total vote count
+                ),
             );
 
             return true;
@@ -513,16 +558,16 @@ impl OutcomeManagerContract {
         let mut calls: Map<u64, CallData> = storage.get(&CALLS).unwrap_or_else(|| Map::new(&env));
         let mut call_data = calls
             .get(call_id)
-            .unwrap_or_else(|| panic!("Call not found"));
+            .unwrap_or_else(|| panic!("{:?}", ContractError::CallNotFound));
 
         if !call_data.settled {
-            panic!("Call not settled");
+            panic!("{:?}", ContractError::CallNotSettled);
         }
 
         let mut was_overturned = false;
         let existing_outcome = call_data
             .outcome
-            .unwrap_or_else(|| panic!("Call outcome missing"));
+            .unwrap_or_else(|| panic!("{:?}", ContractError::CallOutcomeMissing));
 
         if existing_outcome != majority_outcome {
             let mut slashed_calls: Map<u64, bool> = storage
@@ -530,14 +575,14 @@ impl OutcomeManagerContract {
                 .unwrap_or_else(|| Map::new(&env));
 
             if slashed_calls.get(call_id).unwrap_or(false) {
-                panic!("Call already slashed");
+                panic!("{:?}", ContractError::CallAlreadySlashed);
             }
 
             let call_oracles: Map<u64, BytesN<32>> =
                 storage.get(&CALL_ORACLES).unwrap_or_else(|| Map::new(&env));
             let settling_oracle = call_oracles
                 .get(call_id)
-                .unwrap_or_else(|| panic!("Settling oracle not found"));
+                .unwrap_or_else(|| panic!("{:?}", ContractError::CallNotFound));
 
             let mut bonds: Map<BytesN<32>, u128> =
                 storage.get(&ORACLE_BONDS).unwrap_or_else(|| Map::new(&env));
@@ -563,6 +608,7 @@ impl OutcomeManagerContract {
                         settling_oracle,
                         slash_amount,
                         fee_config.treasury,
+                        0u128, // Remaining bond (now 0 after slash)
                     ),
                 );
             }
@@ -574,13 +620,19 @@ impl OutcomeManagerContract {
 
         call_data.outcome = Some(majority_outcome);
         call_data.final_price = Some(majority_final_price);
+        let end_ts = call_data.end_ts; // Clone before move
         calls.set(call_id, call_data);
         storage.set(&CALLS, &calls);
 
         if was_overturned {
             env.events().publish(
                 (Symbol::new(&env, "outcome_overturned"),),
-                Event::OutcomeOverturned(call_id, majority_outcome, majority_final_price),
+                Event::OutcomeOverturned(
+                    call_id,
+                    majority_outcome,
+                    majority_final_price,
+                    end_ts, // Call end timestamp
+                ),
             );
         }
 
@@ -631,7 +683,7 @@ impl OutcomeManagerContract {
 
         if let Some(withdrawn) = withdrawals.get((call_id, user.clone())) {
             if withdrawn {
-                panic!("Already withdrawn");
+                panic!("{:?}", ContractError::AlreadyWithdrawn);
             }
         }
 
@@ -639,11 +691,11 @@ impl OutcomeManagerContract {
         let calls: Map<u64, CallData> = storage.get(&CALLS).unwrap_or_else(|| Map::new(&env));
         let call_data = calls
             .get(call_id)
-            .unwrap_or_else(|| panic!("Call not found"));
+            .unwrap_or_else(|| panic!("{:?}", ContractError::CallNotFound));
 
         // Verify call is settled
         if !call_data.settled {
-            panic!("Call not settled");
+            panic!("{:?}", ContractError::CallNotSettled);
         }
 
         let outcome = call_data.outcome.unwrap();
@@ -704,7 +756,12 @@ impl OutcomeManagerContract {
         // Emit event
         env.events().publish(
             (Symbol::new(&env, "payout_withdrawn"),),
-            Event::PayoutWithdrawn(call_id, user, payout),
+            Event::PayoutWithdrawn(
+                call_id,
+                user,
+                payout,
+                outcome, // Settlement outcome for reference
+            ),
         );
 
         payout
@@ -724,6 +781,134 @@ impl OutcomeManagerContract {
             storage.get(&WITHDRAWALS).unwrap_or_else(|| Map::new(&env));
 
         withdrawals.get((call_id, user)).unwrap_or(false)
+    }
+
+    // ── Cross-Chain Oracle Reference (Issue #234) ─────────────────────────────
+
+    /// Post a cross-chain hash reference for a call outcome.
+    ///
+    /// This allows an outcome submitted on Soroban to be verified against
+    /// a hash posted on another chain (e.g., Base). The hash should be
+    /// computed as: keccak256(call_id || outcome || final_price || timestamp)
+    ///
+    /// # Arguments
+    /// * `call_id` - The ID of the call
+    /// * `outcome_hash` - The hash posted on the source chain
+    /// * `source_chain_id` - Chain ID where hash was posted (e.g., 8453 for Base)
+    /// * `source_tx_hash` - Transaction hash on the source chain
+    /// * `source_block_number` - Block number on the source chain
+    pub fn post_cross_chain_hash(
+        env: Env,
+        call_id: u64,
+        outcome_hash: BytesN<32>,
+        source_chain_id: u64,
+        source_tx_hash: BytesN<32>,
+        source_block_number: u64,
+    ) {
+        Self::require_owner_auth(&env);
+
+        let storage = env.storage().instance();
+        let mut hashes: Map<u64, CrossChainReference> =
+            storage.get(&CROSS_CHAIN_HASHES).unwrap_or_else(|| Map::new(&env));
+
+        let cross_chain_ref = CrossChainReference {
+            outcome_hash: outcome_hash.clone(),
+            source_chain_id,
+            source_tx_hash,
+            source_block_number,
+            timestamp: env.ledger().timestamp(),
+        };
+
+        hashes.set(call_id, cross_chain_ref);
+        storage.set(&CROSS_CHAIN_HASHES, &hashes);
+
+        env.events().publish(
+            (Symbol::new(&env, "cross_chain_hash_posted"),),
+            Event::CrossChainHashPosted(call_id, outcome_hash, source_chain_id),
+        );
+    }
+
+    /// Verify an outcome against a cross-chain hash reference.
+    ///
+    /// This function checks if the provided outcome data matches the
+    /// hash that was previously posted from another chain.
+    ///
+    /// # Arguments
+    /// * `call_id` - The ID of the call
+    /// * `outcome` - The outcome to verify
+    /// * `final_price` - The final price to verify
+    /// * `timestamp` - The timestamp to verify
+    ///
+    /// # Returns
+    /// `true` if the outcome matches the cross-chain hash, `false` otherwise
+    pub fn verify_cross_chain_outcome(
+        env: Env,
+        call_id: u64,
+        outcome: bool,
+        final_price: u128,
+        timestamp: u64,
+    ) -> bool {
+        let storage = env.storage().instance();
+        let hashes: Map<u64, CrossChainReference> =
+            storage.get(&CROSS_CHAIN_HASHES).unwrap_or_else(|| Map::new(&env));
+
+        let cross_chain_ref = match hashes.get(call_id) {
+            Some(ref_hash) => ref_hash,
+            None => panic!("{:?}", ContractError::NoCrossChainReference),
+        };
+
+        // Recompute the hash from the provided outcome data
+        // Format: call_id (8 bytes) + outcome (1 byte) + final_price (16 bytes) + timestamp (8 bytes)
+        let mut message = Bytes::new(&env);
+
+        // Add call_id (u64 big-endian)
+        message.push_back((call_id >> 56) as u8);
+        message.push_back(((call_id >> 48) & 0xFF) as u8);
+        message.push_back(((call_id >> 40) & 0xFF) as u8);
+        message.push_back(((call_id >> 32) & 0xFF) as u8);
+        message.push_back(((call_id >> 24) & 0xFF) as u8);
+        message.push_back(((call_id >> 16) & 0xFF) as u8);
+        message.push_back(((call_id >> 8) & 0xFF) as u8);
+        message.push_back((call_id & 0xFF) as u8);
+
+        // Add outcome (1 byte)
+        message.push_back(if outcome { 1u8 } else { 0u8 });
+
+        // Add final_price (u128 big-endian, 16 bytes)
+        for i in (0..16).rev() {
+            message.push_back(((final_price >> (i * 8)) & 0xFF) as u8);
+        }
+
+        // Add timestamp (u64 big-endian)
+        message.push_back((timestamp >> 56) as u8);
+        message.push_back(((timestamp >> 48) & 0xFF) as u8);
+        message.push_back(((timestamp >> 40) & 0xFF) as u8);
+        message.push_back(((timestamp >> 32) & 0xFF) as u8);
+        message.push_back(((timestamp >> 24) & 0xFF) as u8);
+        message.push_back(((timestamp >> 16) & 0xFF) as u8);
+        message.push_back(((timestamp >> 8) & 0xFF) as u8);
+        message.push_back((timestamp & 0xFF) as u8);
+
+        // Compute SHA-256 hash of the message
+        let computed_hash = env.crypto().sha256(&message);
+
+        // Compare with the stored cross-chain hash
+        let verified = computed_hash.to_bytes() == cross_chain_ref.outcome_hash;
+
+        env.events().publish(
+            (Symbol::new(&env, "cross_chain_verified"),),
+            Event::CrossChainVerified(call_id, verified),
+        );
+
+        verified
+    }
+
+    /// Get the cross-chain reference for a call.
+    pub fn get_cross_chain_reference(env: Env, call_id: u64) -> Option<CrossChainReference> {
+        let storage = env.storage().instance();
+        let hashes: Map<u64, CrossChainReference> =
+            storage.get(&CROSS_CHAIN_HASHES).unwrap_or_else(|| Map::new(&env));
+        hashes.get(call_id)
     }
 }
 

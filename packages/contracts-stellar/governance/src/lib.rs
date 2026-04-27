@@ -1,7 +1,7 @@
 #![no_std]
 
 mod contract;
-mod errors;
+pub mod errors;
 mod ownership;
 mod roles;
 mod soulbound;

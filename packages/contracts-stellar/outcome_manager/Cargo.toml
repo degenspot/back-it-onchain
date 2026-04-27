@@ -10,6 +10,7 @@ crate-type = ["cdylib"]
 [dependencies]
 soroban-sdk = "21.4"
 soroban-sdk-macros = "21.4"
+governance = { path = "../governance" }
 
 [dev-dependencies]
 soroban-sdk = { version = "21.4", features = ["testutils"] }
