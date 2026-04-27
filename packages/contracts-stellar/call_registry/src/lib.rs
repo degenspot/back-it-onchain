@@ -1,8 +1,8 @@
 #![no_std]
+use governance::errors::ContractError;
 use soroban_sdk::{
     contract, contractimpl, contracttype, token, Address, BytesN, Env, String, Symbol, Vec,
 };
-use governance::errors::ContractError;
 
 /// Maximum number of outcomes per market.
 const MAX_OUTCOMES: u32 = 32;
@@ -586,8 +586,8 @@ impl CallRegistry {
                 fee,
                 fee_bps,
                 call.outcome_pools.get(outcome_index).unwrap(), // New total pool state
-                call.vault_balance,                              // New vault balance
-                call.participant_count,                          // New participant count
+                call.vault_balance,                             // New vault balance
+                call.participant_count,                         // New participant count
             ),
         );
     }
@@ -766,7 +766,7 @@ impl CallRegistry {
                 refund,
                 remaining,
                 call.outcome_pools.get(outcome_index).unwrap(), // New pool state
-                call.vault_balance,                              // New vault balance
+                call.vault_balance,                             // New vault balance
             ),
         );
     }
@@ -908,9 +908,9 @@ impl CallRegistry {
                 winning_outcome,
                 final_price,
                 gas_fee,
-                call.vault_balance,    // New vault balance
-                call.settled,          // Settlement state
-                call.winning_outcome,  // Winning outcome index
+                call.vault_balance,   // New vault balance
+                call.settled,         // Settlement state
+                call.winning_outcome, // Winning outcome index
             ),
         );
     }

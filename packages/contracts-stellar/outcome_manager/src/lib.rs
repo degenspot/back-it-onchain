@@ -1,9 +1,9 @@
 #![no_std]
+use governance::errors::ContractError;
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, Address, Bytes, BytesN, Env, Map,
     Symbol, Vec,
 };
-use governance::errors::ContractError;
 
 const OWNER: Symbol = symbol_short!("OWNER");
 const ORACLES: Symbol = symbol_short!("ORACLES");
@@ -97,8 +97,8 @@ pub enum Event {
     OracleUpdated(BytesN<32>, bool, u32),               // Added: total oracle count
     OracleBondDeposited(BytesN<32>, u128, u128),        // Added: total bond amount
     OracleBondSlashed(u64, BytesN<32>, u128, Address, u128), // Added: remaining bond
-    CrossChainHashPosted(u64, BytesN<32>, u64),        // Issue #234: call_id, hash, chain_id
-    CrossChainVerified(u64, bool),                     // Issue #234: call_id, verified
+    CrossChainHashPosted(u64, BytesN<32>, u64),         // Issue #234: call_id, hash, chain_id
+    CrossChainVerified(u64, bool),                      // Issue #234: call_id, verified
 }
 
 #[contract]
@@ -756,12 +756,7 @@ impl OutcomeManagerContract {
         // Emit event
         env.events().publish(
             (Symbol::new(&env, "payout_withdrawn"),),
-            Event::PayoutWithdrawn(
-                call_id,
-                user,
-                payout,
-                outcome, // Settlement outcome for reference
-            ),
+            Event::PayoutWithdrawn(call_id, user, payout, outcome), // Settlement outcome for reference
         );
 
         payout
@@ -808,8 +803,9 @@ impl OutcomeManagerContract {
         Self::require_owner_auth(&env);
 
         let storage = env.storage().instance();
-        let mut hashes: Map<u64, CrossChainReference> =
-            storage.get(&CROSS_CHAIN_HASHES).unwrap_or_else(|| Map::new(&env));
+        let mut hashes: Map<u64, CrossChainReference> = storage
+            .get(&CROSS_CHAIN_HASHES)
+            .unwrap_or_else(|| Map::new(&env));
 
         let cross_chain_ref = CrossChainReference {
             outcome_hash: outcome_hash.clone(),
@@ -849,8 +845,9 @@ impl OutcomeManagerContract {
         timestamp: u64,
     ) -> bool {
         let storage = env.storage().instance();
-        let hashes: Map<u64, CrossChainReference> =
-            storage.get(&CROSS_CHAIN_HASHES).unwrap_or_else(|| Map::new(&env));
+        let hashes: Map<u64, CrossChainReference> = storage
+            .get(&CROSS_CHAIN_HASHES)
+            .unwrap_or_else(|| Map::new(&env));
 
         let cross_chain_ref = match hashes.get(call_id) {
             Some(ref_hash) => ref_hash,
@@ -906,8 +903,9 @@ impl OutcomeManagerContract {
     /// Get the cross-chain reference for a call.
     pub fn get_cross_chain_reference(env: Env, call_id: u64) -> Option<CrossChainReference> {
         let storage = env.storage().instance();
-        let hashes: Map<u64, CrossChainReference> =
-            storage.get(&CROSS_CHAIN_HASHES).unwrap_or_else(|| Map::new(&env));
+        let hashes: Map<u64, CrossChainReference> = storage
+            .get(&CROSS_CHAIN_HASHES)
+            .unwrap_or_else(|| Map::new(&env));
         hashes.get(call_id)
     }
 }
