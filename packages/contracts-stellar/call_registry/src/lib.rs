@@ -607,6 +607,94 @@ impl CallRegistry {
         );
     }
 
+    // ── Hedging / Early Exit ──────────────────────────────────────────────────
+
+    /// Allow a user to sell their position back to the pool before the end time
+    /// at a discount. The user receives 80% of their stake back, and the remaining
+    /// 20% stays in the pool for other winners.
+    pub fn exit_early(env: Env, call_id: u64, user: Address) {
+        Self::assert_not_paused(&env);
+        user.require_auth();
+
+        let key = DataKey::Call(call_id);
+        let mut call: Call = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .expect("Call does not exist");
+
+        // Call must still be active (not ended, not settled)
+        if env.ledger().timestamp() >= call.end_ts {
+            panic!("Call ended");
+        }
+        if call.settled {
+            panic!("Call settled");
+        }
+
+        // Determine which side the user has a stake on.
+        // A user can only exit one side per call (they cannot be on both sides
+        // simultaneously in this design — we check YES first, then NO).
+        let yes_stake_key = DataKey::UserStake(call_id, user.clone(), true);
+        let no_stake_key = DataKey::UserStake(call_id, user.clone(), false);
+
+        let yes_stake: i128 = env.storage().persistent().get(&yes_stake_key).unwrap_or(0);
+        let no_stake: i128 = env.storage().persistent().get(&no_stake_key).unwrap_or(0);
+
+        let (position, user_stake) = if yes_stake > 0 {
+            (true, yes_stake)
+        } else if no_stake > 0 {
+            (false, no_stake)
+        } else {
+            panic!("No stake found");
+        };
+
+        // Calculate payout: 80% returned to user, 20% stays in pool
+        let refund = user_stake * 80 / 100;
+        let remaining = user_stake - refund; // 20% that stays for winners
+
+        // Withdraw refund from vault (issue #159)
+        if refund > 0 {
+            Self::vault_withdraw(&env, refund);
+        }
+        call.vault_balance -= refund;
+
+        // Reduce the side total by the full user stake. The `remaining` portion
+        // effectively redistributes to the winning side during settlement.
+        if position {
+            call.total_stake_yes -= user_stake;
+        } else {
+            call.total_stake_no -= user_stake;
+        }
+
+        // Track the 20% penalty as additional pool funds for the *opposite* side.
+        // This makes the remaining funds available to winners on the other side.
+        if remaining > 0 {
+            if position {
+                call.total_stake_no += remaining;
+            } else {
+                call.total_stake_yes += remaining;
+            }
+        }
+
+        env.storage().persistent().set(&key, &call);
+        bump_persistent_ttl(&env, &key);
+
+        // Remove the user's stake entry
+        let stake_key = DataKey::UserStake(call_id, user.clone(), position);
+        env.storage().persistent().remove(&stake_key);
+
+        // Transfer refund to user
+        if refund > 0 {
+            let token_client = token::Client::new(&env, &call.stake_token);
+            token_client.transfer(&env.current_contract_address(), &user, &refund);
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "EarlyExit"), call_id, user),
+            (position, user_stake, refund, remaining),
+        );
+    }
+
     // ── Storage archival (issue #169) ─────────────────────────────────────────
 
     /// Explicitly remove a fully-settled call's storage entry to reclaim state rent.
