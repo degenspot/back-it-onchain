@@ -561,9 +561,9 @@ impl CallRegistry {
         Self::vault_deposit(&env, &call.stake_token, net_amount);
 
         // Update the targeted outcome pool
-        let current_pool = call.outcome_pools.get(outcome_index as usize).unwrap();
+        let current_pool = call.outcome_pools.get(outcome_index).unwrap();
         call.outcome_pools
-            .set(outcome_index as usize, current_pool + net_amount);
+            .set(outcome_index, current_pool + net_amount);
         call.vault_balance += net_amount;
         call.participant_count += 1;
         env.storage().persistent().set(&key, &call);
@@ -614,7 +614,7 @@ impl CallRegistry {
             panic!("Nothing to withdraw");
         }
 
-        let winners_pool = call.outcome_pools.get(outcome_index as usize).unwrap();
+        let winners_pool = call.outcome_pools.get(outcome_index).unwrap();
 
         // Sum all losing pools
         let mut losers_pool: i128 = 0;
@@ -624,8 +624,11 @@ impl CallRegistry {
             }
         }
 
+        let gas_fee = losers_pool * 5 / 1000;
+        let available_losers_pool = losers_pool - gas_fee;
+
         // Proportional share of losers pool
-        let payout = user_stake + (user_stake * losers_pool / winners_pool);
+        let payout = user_stake + (user_stake * available_losers_pool / winners_pool);
 
         // Withdraw from vault (issue #159); vault keeps the interest
         Self::vault_withdraw(&env, payout);
@@ -662,11 +665,11 @@ impl CallRegistry {
             .expect("Call does not exist");
 
         // Call must still be active (not ended, not settled)
-        if env.ledger().timestamp() >= call.end_ts {
-            panic!("Call ended");
-        }
         if call.settled {
             panic!("Call settled");
+        }
+        if env.ledger().timestamp() >= call.end_ts {
+            panic!("Call ended");
         }
 
         // Find which outcome the user has staked on.
@@ -698,9 +701,9 @@ impl CallRegistry {
         call.vault_balance -= refund;
 
         // Reduce the outcome pool by the full user stake.
-        let current_pool = call.outcome_pools.get(outcome_index as usize).unwrap();
+        let current_pool = call.outcome_pools.get(outcome_index).unwrap();
         call.outcome_pools
-            .set(outcome_index as usize, current_pool - user_stake);
+            .set(outcome_index, current_pool - user_stake);
 
         // Distribute the 20% penalty across all OTHER outcome pools proportionally.
         if remaining > 0 {
