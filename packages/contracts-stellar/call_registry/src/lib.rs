@@ -1,4 +1,5 @@
 #![no_std]
+use governance::errors::ContractError;
 use soroban_sdk::{
     contract, contractimpl, contracttype, token, Address, BytesN, Env, String, Symbol, Vec,
 };
@@ -216,7 +217,7 @@ impl CallRegistry {
     /// Initialize admin and pause state.
     pub fn initialize(env: Env, admin: Address) {
         if env.storage().persistent().has(&DataKey::Admin) {
-            panic!("Contract already initialized");
+            panic!("Already initialized");
         }
         admin.require_auth();
         env.storage().persistent().set(&DataKey::Admin, &admin);
@@ -418,7 +419,7 @@ impl CallRegistry {
             panic!("End time must be in future");
         }
         if stake_amount <= 0 {
-            panic!("Stake amount must be > 0");
+            panic!("Invalid amount");
         }
         if metadata.num_outcomes < MIN_OUTCOMES {
             panic!("Must have at least 2 outcomes");
@@ -530,7 +531,7 @@ impl CallRegistry {
             panic!("Call settled");
         }
         if amount <= 0 {
-            panic!("Amount must be > 0");
+            panic!("Invalid amount");
         }
         if outcome_index >= call.outcome_pools.len() as u32 {
             panic!("Invalid outcome index");
@@ -579,7 +580,15 @@ impl CallRegistry {
 
         env.events().publish(
             (Symbol::new(&env, "StakeAdded"), call_id, staker),
-            (outcome_index, net_amount, fee, fee_bps),
+            (
+                outcome_index,
+                net_amount,
+                fee,
+                fee_bps,
+                call.outcome_pools.get(outcome_index).unwrap(), // New total pool state
+                call.vault_balance,                             // New vault balance
+                call.participant_count,                         // New participant count
+            ),
         );
     }
 
@@ -597,7 +606,7 @@ impl CallRegistry {
             .expect("Call does not exist");
 
         if !call.settled {
-            panic!("Call not settled");
+            panic!("Call not yet settled");
         }
         if call.winning_outcome != outcome_index {
             panic!("Not on winning side");
@@ -611,7 +620,7 @@ impl CallRegistry {
             .expect("No stake found");
 
         if user_stake == 0 {
-            panic!("Nothing to withdraw");
+            panic!("No stake found");
         }
 
         let winners_pool = call.outcome_pools.get(outcome_index).unwrap();
@@ -643,7 +652,10 @@ impl CallRegistry {
 
         env.events().publish(
             (Symbol::new(&env, "PayoutWithdrawn"), call_id, user),
-            payout,
+            (
+                payout,
+                call.vault_balance, // New vault balance after withdrawal
+            ),
         );
     }
 
@@ -748,7 +760,14 @@ impl CallRegistry {
 
         env.events().publish(
             (Symbol::new(&env, "EarlyExit"), call_id, user),
-            (outcome_index, user_stake, refund, remaining),
+            (
+                outcome_index,
+                user_stake,
+                refund,
+                remaining,
+                call.outcome_pools.get(outcome_index).unwrap(), // New pool state
+                call.vault_balance,                             // New vault balance
+            ),
         );
     }
 
@@ -802,7 +821,7 @@ impl CallRegistry {
             total_weight += weight;
         }
         if total_weight == 0 {
-            panic!("Total weight is zero");
+            panic!("Total governance weight is zero");
         }
 
         let token_client = token::Client::new(&env, &stake_token);
@@ -822,7 +841,11 @@ impl CallRegistry {
 
         env.events().publish(
             (Symbol::new(&env, "DividendsDistributed"),),
-            (total_fees, total_weight),
+            (
+                total_fees,
+                total_weight,
+                0i128, // New platform fees balance (reset to 0)
+            ),
         );
     }
 
@@ -847,10 +870,10 @@ impl CallRegistry {
             .expect("Call does not exist");
 
         if call.settled {
-            panic!("Call already settled");
+            panic!("Call settled");
         }
         if env.ledger().timestamp() < call.end_ts {
-            panic!("Call has not ended yet");
+            panic!("Call not yet ended");
         }
         if winning_outcome >= call.outcome_pools.len() as u32 {
             panic!("Invalid winning outcome");
@@ -881,7 +904,14 @@ impl CallRegistry {
 
         env.events().publish(
             (Symbol::new(&env, "CallFinalized"), call_id, caller),
-            (winning_outcome, final_price, gas_fee),
+            (
+                winning_outcome,
+                final_price,
+                gas_fee,
+                call.vault_balance,   // New vault balance
+                call.settled,         // Settlement state
+                call.winning_outcome, // Winning outcome index
+            ),
         );
     }
 
