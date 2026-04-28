@@ -121,7 +121,7 @@ impl OutcomeManagerContract {
 
     fn assert_not_paused(env: &Env) {
         if Self::is_paused(env) {
-            panic!("{:?}", ContractError::ContractPaused);
+            panic!("Contract is paused");
         }
     }
 
@@ -129,7 +129,7 @@ impl OutcomeManagerContract {
         env.storage()
             .persistent()
             .get(&FEE_CONFIG)
-            .unwrap_or_else(|| panic!("{:?}", ContractError::FeeConfigNotSet))
+            .unwrap_or_else(|| panic!("Fee config not set"))
     }
 
     fn to_i128(value: u128) -> i128 {
@@ -144,7 +144,7 @@ impl OutcomeManagerContract {
         env.storage()
             .persistent()
             .get(&ORACLE_BOND_TOKEN)
-            .unwrap_or_else(|| panic!("{:?}", ContractError::OracleBondTokenNotSet))
+            .unwrap_or_else(|| panic!("Oracle bond token not set"))
     }
 
     /// Count the total number of currently authorized oracles.
@@ -168,7 +168,7 @@ impl OutcomeManagerContract {
         let storage = env.storage().instance();
 
         if storage.has(&OWNER) {
-            panic!("{:?}", ContractError::AlreadyInitialized);
+            panic!("Already initialized");
         }
 
         storage.set(&OWNER, &owner);
@@ -226,7 +226,7 @@ impl OutcomeManagerContract {
         Self::require_owner_auth(&env);
 
         if basis_points > 10_000 {
-            panic!("{:?}", ContractError::FeeBasisPointsExceeded);
+            panic!("Fee basis points exceeded");
         }
 
         env.storage().persistent().set(
@@ -256,10 +256,10 @@ impl OutcomeManagerContract {
     pub fn set_quorum_threshold(env: Env, numerator: u32, denominator: u32) {
         Self::require_owner_auth(&env);
         if denominator == 0 {
-            panic!("{:?}", ContractError::ZeroDenominator);
+            panic!("Denominator cannot be zero");
         }
         if numerator == 0 || numerator > denominator {
-            panic!("{:?}", ContractError::InvalidQuorumNumerator);
+            panic!("Numerator must be in range");
         }
         env.storage().persistent().set(&QUORUM_NUM, &numerator);
         env.storage().persistent().set(&QUORUM_DEN, &denominator);
@@ -314,14 +314,14 @@ impl OutcomeManagerContract {
         Self::assert_not_paused(&env);
 
         if amount == 0 {
-            panic!("{:?}", ContractError::InvalidAmount);
+            panic!("Invalid amount");
         }
 
         let storage = env.storage().instance();
         let oracles: Map<BytesN<32>, bool> =
             storage.get(&ORACLES).unwrap_or_else(|| Map::new(&env));
         if !oracles.get(oracle.clone()).unwrap_or(false) {
-            panic!("{:?}", ContractError::OracleNotAuthorized);
+            panic!("Oracle not authorized");
         }
 
         let owner = Self::owner_address(&env);
@@ -391,10 +391,10 @@ impl OutcomeManagerContract {
 
         if let Some(call_data) = calls.get(call_id) {
             if call_data.settled {
-                panic!("{:?}", ContractError::CallSettled);
+                panic!("Call already settled");
             }
         } else {
-            panic!("{:?}", ContractError::CallNotFound);
+            panic!("Call not found");
         }
 
         // Construct message for signature verification
@@ -439,13 +439,13 @@ impl OutcomeManagerContract {
         let is_authorized = oracles.get(oracle_pubkey.clone()).unwrap_or(false);
 
         if !is_authorized {
-            panic!("{:?}", ContractError::OracleNotAuthorized);
+            panic!("Oracle not authorized");
         }
 
         let bonds: Map<BytesN<32>, u128> =
             storage.get(&ORACLE_BONDS).unwrap_or_else(|| Map::new(&env));
         if bonds.get(oracle_pubkey.clone()).unwrap_or(0) == 0 {
-            panic!("{:?}", ContractError::OracleBondRequired);
+            panic!("Oracle bond required");
         }
 
         // Load existing votes for this call
@@ -458,7 +458,7 @@ impl OutcomeManagerContract {
         for i in 0..call_votes.len() {
             let existing = call_votes.get(i).unwrap();
             if existing.oracle == oracle_pubkey {
-                panic!("{:?}", ContractError::OracleAlreadyVoted);
+                panic!("Oracle already voted");
             }
         }
 
@@ -558,16 +558,16 @@ impl OutcomeManagerContract {
         let mut calls: Map<u64, CallData> = storage.get(&CALLS).unwrap_or_else(|| Map::new(&env));
         let mut call_data = calls
             .get(call_id)
-            .unwrap_or_else(|| panic!("{:?}", ContractError::CallNotFound));
+            .unwrap_or_else(|| panic!("Call not found"));
 
         if !call_data.settled {
-            panic!("{:?}", ContractError::CallNotSettled);
+            panic!("Call not yet settled");
         }
 
         let mut was_overturned = false;
         let existing_outcome = call_data
             .outcome
-            .unwrap_or_else(|| panic!("{:?}", ContractError::CallOutcomeMissing));
+            .unwrap_or_else(|| panic!("Call outcome missing"));
 
         if existing_outcome != majority_outcome {
             let mut slashed_calls: Map<u64, bool> = storage
@@ -575,14 +575,14 @@ impl OutcomeManagerContract {
                 .unwrap_or_else(|| Map::new(&env));
 
             if slashed_calls.get(call_id).unwrap_or(false) {
-                panic!("{:?}", ContractError::CallAlreadySlashed);
+                panic!("Call already slashed");
             }
 
             let call_oracles: Map<u64, BytesN<32>> =
                 storage.get(&CALL_ORACLES).unwrap_or_else(|| Map::new(&env));
             let settling_oracle = call_oracles
                 .get(call_id)
-                .unwrap_or_else(|| panic!("{:?}", ContractError::CallNotFound));
+                .unwrap_or_else(|| panic!("Call not found"));
 
             let mut bonds: Map<BytesN<32>, u128> =
                 storage.get(&ORACLE_BONDS).unwrap_or_else(|| Map::new(&env));
@@ -683,7 +683,7 @@ impl OutcomeManagerContract {
 
         if let Some(withdrawn) = withdrawals.get((call_id, user.clone())) {
             if withdrawn {
-                panic!("{:?}", ContractError::AlreadyWithdrawn);
+                panic!("Already withdrawn");
             }
         }
 
@@ -691,11 +691,11 @@ impl OutcomeManagerContract {
         let calls: Map<u64, CallData> = storage.get(&CALLS).unwrap_or_else(|| Map::new(&env));
         let call_data = calls
             .get(call_id)
-            .unwrap_or_else(|| panic!("{:?}", ContractError::CallNotFound));
+            .unwrap_or_else(|| panic!("Call not found"));
 
         // Verify call is settled
         if !call_data.settled {
-            panic!("{:?}", ContractError::CallNotSettled);
+            panic!("Call not yet settled");
         }
 
         let outcome = call_data.outcome.unwrap();
@@ -851,7 +851,7 @@ impl OutcomeManagerContract {
 
         let cross_chain_ref = match hashes.get(call_id) {
             Some(ref_hash) => ref_hash,
-            None => panic!("{:?}", ContractError::NoCrossChainReference),
+            None => panic!("No cross-chain reference"),
         };
 
         // Recompute the hash from the provided outcome data

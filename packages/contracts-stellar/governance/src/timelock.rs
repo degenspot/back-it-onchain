@@ -19,7 +19,7 @@ pub fn apply_fee_change(e: &Env) {
     let ready_at: u64 = e.storage().instance().get(&DataKey::FeeApplyTime).unwrap();
 
     if now < ready_at {
-        panic!("{:?}", ContractError::CallNotEnded);
+        panic!("Timelock not yet expired");
     }
 
     let queued_fee: u32 = e.storage().instance().get(&DataKey::PendingFee).unwrap();

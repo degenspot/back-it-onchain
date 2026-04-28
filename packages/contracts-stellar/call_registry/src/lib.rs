@@ -158,7 +158,7 @@ impl CallRegistry {
 
     fn assert_not_paused(env: &Env) {
         if Self::is_paused(env) {
-            panic!("{:?}", ContractError::ContractPaused);
+            panic!("Contract is paused");
         }
     }
 
@@ -171,7 +171,7 @@ impl CallRegistry {
             .get(&DataKey::WhitelistedToken(token.clone()))
             .unwrap_or(false);
         if !whitelisted {
-            panic!("{:?}", ContractError::TokenNotWhitelisted);
+            panic!("Token not whitelisted");
         }
     }
 
@@ -217,7 +217,7 @@ impl CallRegistry {
     /// Initialize admin and pause state.
     pub fn initialize(env: Env, admin: Address) {
         if env.storage().persistent().has(&DataKey::Admin) {
-            panic!("{:?}", ContractError::AlreadyInitialized);
+            panic!("Already initialized");
         }
         admin.require_auth();
         env.storage().persistent().set(&DataKey::Admin, &admin);
@@ -343,7 +343,7 @@ impl CallRegistry {
         voucher.require_auth();
 
         if !Self::is_authorized_staker_internal(&env, &voucher) {
-            panic!("{:?}", ContractError::NotAuthorizedStaker);
+            panic!("Not an authorized staker");
         }
 
         let key = DataKey::TokenProposal(token.clone());
@@ -416,16 +416,16 @@ impl CallRegistry {
         creator.require_auth();
 
         if end_ts <= env.ledger().timestamp() {
-            panic!("{:?}", ContractError::InvalidEndTime);
+            panic!("End time must be in future");
         }
         if stake_amount <= 0 {
-            panic!("{:?}", ContractError::InvalidAmount);
+            panic!("Invalid amount");
         }
         if metadata.num_outcomes < MIN_OUTCOMES {
-            panic!("{:?}", ContractError::TooFewOutcomes);
+            panic!("Must have at least 2 outcomes");
         }
         if metadata.num_outcomes > MAX_OUTCOMES {
-            panic!("{:?}", ContractError::TooManyOutcomes);
+            panic!("Too many outcomes");
         }
 
         // Transfer stake from creator to contract
@@ -525,16 +525,16 @@ impl CallRegistry {
             .expect("Call does not exist");
 
         if env.ledger().timestamp() >= call.end_ts {
-            panic!("{:?}", ContractError::CallEnded);
+            panic!("Call ended");
         }
         if call.settled {
-            panic!("{:?}", ContractError::CallSettled);
+            panic!("Call settled");
         }
         if amount <= 0 {
-            panic!("{:?}", ContractError::InvalidAmount);
+            panic!("Invalid amount");
         }
         if outcome_index >= call.outcome_pools.len() as u32 {
-            panic!("{:?}", ContractError::InvalidOutcomeIndex);
+            panic!("Invalid outcome index");
         }
 
         // Transfer full amount from staker to contract
@@ -606,10 +606,10 @@ impl CallRegistry {
             .expect("Call does not exist");
 
         if !call.settled {
-            panic!("{:?}", ContractError::CallNotSettled);
+            panic!("Call not yet settled");
         }
         if call.winning_outcome != outcome_index {
-            panic!("{:?}", ContractError::NotOnWinningSide);
+            panic!("Not on winning side");
         }
 
         let stake_key = DataKey::UserStake(call_id, user.clone(), outcome_index);
@@ -620,7 +620,7 @@ impl CallRegistry {
             .expect("No stake found");
 
         if user_stake == 0 {
-            panic!("{:?}", ContractError::NothingToWithdraw);
+            panic!("No stake found");
         }
 
         let winners_pool = call.outcome_pools.get(outcome_index).unwrap();
@@ -678,10 +678,10 @@ impl CallRegistry {
 
         // Call must still be active (not ended, not settled)
         if call.settled {
-            panic!("{:?}", ContractError::CallSettled);
+            panic!("Call settled");
         }
         if env.ledger().timestamp() >= call.end_ts {
-            panic!("{:?}", ContractError::CallEnded);
+            panic!("Call ended");
         }
 
         // Find which outcome the user has staked on.
@@ -699,7 +699,7 @@ impl CallRegistry {
 
         let outcome_index = match found_outcome {
             Some(idx) => idx,
-            None => panic!("{:?}", ContractError::NoStakeFound),
+            None => panic!("No stake found"),
         };
 
         // Calculate payout: 80% returned to user, 20% stays in pool
@@ -785,7 +785,7 @@ impl CallRegistry {
             .expect("Call does not exist");
 
         if !call.settled {
-            panic!("{:?}", ContractError::CallNotSettledForArchive);
+            panic!("Call not yet settled");
         }
 
         env.storage().persistent().remove(&key);
@@ -811,7 +811,7 @@ impl CallRegistry {
             .unwrap_or(0);
 
         if total_fees == 0 {
-            panic!("{:?}", ContractError::NoFeesToDistribute);
+            panic!("No fees to distribute");
         }
 
         // Compute total governance weight
@@ -821,7 +821,7 @@ impl CallRegistry {
             total_weight += weight;
         }
         if total_weight == 0 {
-            panic!("{:?}", ContractError::ZeroWeight);
+            panic!("Total governance weight is zero");
         }
 
         let token_client = token::Client::new(&env, &stake_token);
@@ -870,13 +870,13 @@ impl CallRegistry {
             .expect("Call does not exist");
 
         if call.settled {
-            panic!("{:?}", ContractError::CallSettled);
+            panic!("Call settled");
         }
         if env.ledger().timestamp() < call.end_ts {
-            panic!("{:?}", ContractError::CallNotEnded);
+            panic!("Call not yet ended");
         }
         if winning_outcome >= call.outcome_pools.len() as u32 {
-            panic!("{:?}", ContractError::InvalidWinningOutcome);
+            panic!("Invalid winning outcome");
         }
 
         // Sum all losing pools
