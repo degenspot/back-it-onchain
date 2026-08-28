@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "vitest run --project e2e",
+    "check:i18n": "node --experimental-strip-types scripts/check-i18n.ts"
   },
   "dependencies": {
     "@coinbase/onchainkit": "^1.1.2",

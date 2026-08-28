@@ -3,13 +3,15 @@
 import { useLocale } from 'next-intl';
 import React from 'react';
 import { Languages } from 'lucide-react';
-import { switchLocale } from './I18nProvider';
+import { switchLocale, SUPPORTED_LOCALES } from './I18nProvider';
 
 export default function LanguageSwitcher() {
   const locale = useLocale();
 
   const handleToggle = () => {
-    const nextLocale = locale === 'en' ? 'es' : 'en';
+    const locales: readonly string[] = [...SUPPORTED_LOCALES];
+    const index = locales.indexOf(locale);
+    const nextLocale = locales[(index + 1) % locales.length];
     switchLocale(nextLocale);
   };
 

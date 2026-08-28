@@ -1,0 +1,39 @@
+{
+  "Common": {
+    "explore": "Erkunden",
+    "language_selector": "Sprache"
+  },
+  "Landing": {
+    "heroTitle": "Sage die Zukunft voraus. Setze Onchain.",
+    "heroSub": "Die soziale Vorhersage-Schicht für Stellar und Base.",
+    "live": "Live auf Base Sepolia",
+    "features": {
+      "create": {
+        "title": "Calls erstellen",
+        "description": "Sage Preisbewegungen voraus, indem du Calls mit Zielpreisen und Zeitrahmen erstellst."
+      },
+      "stake": {
+        "title": "Reputation einsetzen",
+        "description": "Unterstütze Calls anderer, um Reputation aufzubauen und Überzeugung zu signalisieren."
+      },
+      "earn": {
+        "title": "Belohnungen verdienen",
+        "description": "Gewinne Belohnungen, wenn deine Vorhersagen korrekt sind — Reputation und Auszahlungen."
+      }
+    }
+  },
+  "Nav": {
+    "home": "Startseite",
+    "explore": "Erkunden",
+    "leaderboard": "Rangliste",
+    "create": "Erstellen",
+    "portfolio": "Portfolio",
+    "activity": "Aktivität",
+    "profile": "Profil",
+    "connect_stellar": "Stellar verbinden"
+  },
+  "Navbar": {
+    "title": "Back It (Onchain)",
+    "wallet_settings": "Wallet-Einstellungen"
+  }
+}
