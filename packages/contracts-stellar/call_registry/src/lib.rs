@@ -226,6 +226,75 @@ impl CallRegistry {
         }
     }
 
+    // ── Fee accrual (SC-088) ──────────────────────────────────────────────────
+
+    /// Credit `fee_amount` to the persistent `PlatformFees` entry and emit
+    /// `FeeAccrued`. Returns the new accumulated total.
+    ///
+    /// Single accrual path shared by `stake_on_call`, `withdraw_payout` and
+    /// `exit_early`; the public `accrue_fee` hook wraps this with the
+    /// registry-only authorization check.
+    fn accrue_fee_internal(env: &Env, call_id: u64, fee_amount: i128) -> i128 {
+        if fee_amount < 0 {
+            panic!("{:?}", ContractError::InvalidAmount);
+        }
+
+        let current_fees: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PlatformFees)
+            .unwrap_or(0);
+        let new_fees = current_fees
+            .checked_add(fee_amount)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow));
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::PlatformFees, &new_fees);
+        // Persistent write → bump TTL (issue #169)
+        bump_persistent_ttl(env, &DataKey::PlatformFees);
+
+        env.events().publish(
+            (Symbol::new(env, "FeeAccrued"), call_id),
+            (
+                fee_amount,   // accrued by this invocation
+                current_fees, // PlatformFees before
+                new_fees,     // new PlatformFees total
+            ),
+        );
+
+        new_fees
+    }
+
+    /// Fee-accrual hook (SC-088).
+    ///
+    /// Increments the persistent `PlatformFees` entry by `fee_amount` using
+    /// `checked_add` and emits `FeeAccrued` with the new total. Invoked by the
+    /// registry itself from `stake_on_call` and `exit_early`, and exposed so the
+    /// treasury flow has a single auditable entry point.
+    ///
+    /// Authorization: `caller` must be this contract — it is compared against
+    /// `env.current_contract_address()` and must have authorized the
+    /// invocation. Soroban exposes no invoker introspection, so the caller is
+    /// passed explicitly rather than inferred; any non-registry caller reverts
+    /// with `ContractError::Unauthorized`.
+    ///
+    /// Returns the new accumulated `PlatformFees` balance.
+    pub fn accrue_fee(env: Env, caller: Address, call_id: u64, fee_amount: i128) -> i128 {
+        caller.require_auth();
+        if caller != env.current_contract_address() {
+            panic!("{:?}", ContractError::Unauthorized);
+        }
+        if fee_amount <= 0 {
+            panic!("{:?}", ContractError::InvalidAmount);
+        }
+        if !env.storage().persistent().has(&DataKey::Call(call_id)) {
+            panic!("{:?}", ContractError::CallNotFound);
+        }
+
+        Self::accrue_fee_internal(&env, call_id, fee_amount)
+    }
+
     // ── Admin ─────────────────────────────────────────────────────────────────
 
     /// Initialize admin and pause state.
@@ -577,16 +646,10 @@ impl CallRegistry {
         let fee = received * fee_bps / 10_000;
         let net_amount = received - fee;
 
-        // Accumulate platform fee for dividend distribution (issue #160)
+        // Accrue the platform fee for dividend distribution via the SC-088 hook
+        // (issue #160). Emits FeeAccrued and bumps the PlatformFees TTL.
         if fee > 0 {
-            let current_fees: i128 = env
-                .storage()
-                .persistent()
-                .get(&DataKey::PlatformFees)
-                .unwrap_or(0);
-            env.storage()
-                .persistent()
-                .set(&DataKey::PlatformFees, &(current_fees + fee));
+            Self::accrue_fee_internal(&env, call_id, fee);
         }
 
         // Deposit net stake into vault (issue #159)
@@ -708,19 +771,9 @@ impl CallRegistry {
             .checked_sub(fee)
             .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow));
 
+        // Accrue via the SC-088 hook (checked_add + FeeAccrued + TTL bump).
         if fee > 0 {
-            let current_fees: i128 = env
-                .storage()
-                .persistent()
-                .get(&DataKey::PlatformFees)
-                .unwrap_or(0);
-            let new_fees = current_fees
-                .checked_add(fee)
-                .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow));
-            env.storage()
-                .persistent()
-                .set(&DataKey::PlatformFees, &new_fees);
-            bump_persistent_ttl(&env, &DataKey::PlatformFees);
+            Self::accrue_fee_internal(&env, call_id, fee);
         }
 
         // Withdraw gross (payout + fee) from vault so fee tokens remain on the
@@ -809,22 +862,53 @@ impl CallRegistry {
             None => panic!("No stake found"),
         };
 
-        // Calculate payout: 80% returned to user, 20% stays in pool
-        let refund = user_stake * 80 / 100;
-        let remaining = user_stake - refund; // 20% that stays for winners
+        // Calculate payout: 80% returned to user, 20% held back as an exit penalty.
+        let refund = user_stake
+            .checked_mul(80)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow))
+            .checked_div(100)
+            .unwrap_or(0);
+        let penalty = user_stake
+            .checked_sub(refund)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow));
 
-        // Withdraw refund from vault (issue #159)
-        if refund > 0 {
-            Self::vault_withdraw(&env, refund);
+        // The platform takes its surge-fee cut of the exit penalty (SC-088);
+        // whatever is left is redistributed across the other outcome pools.
+        let fee_bps = compute_fee_basis_points(call.participant_count);
+        let fee = penalty
+            .checked_mul(fee_bps)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow))
+            .checked_div(10_000)
+            .unwrap_or(0);
+        let remaining = penalty
+            .checked_sub(fee)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow));
+
+        // Withdraw the refund plus the accrued fee from the vault so the fee
+        // tokens sit on the contract balance ready for dividend distribution
+        // (mirrors withdraw_payout, issue #159).
+        let vault_out = refund
+            .checked_add(fee)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow));
+        if vault_out > 0 {
+            Self::vault_withdraw(&env, vault_out);
         }
-        call.vault_balance -= refund;
+        call.vault_balance -= vault_out;
+
+        // Accrue the exit fee to PlatformFees via the SC-088 hook.
+        let platform_fees_total = if fee > 0 {
+            Self::accrue_fee_internal(&env, call_id, fee)
+        } else {
+            Self::get_platform_fees(env.clone())
+        };
 
         // Reduce the outcome pool by the full user stake.
         let current_pool = call.outcome_pools.get(outcome_index).unwrap();
         call.outcome_pools
             .set(outcome_index, current_pool - user_stake);
 
-        // Distribute the 20% penalty across all OTHER outcome pools proportionally.
+        // Distribute the penalty (net of the platform fee) across all OTHER
+        // outcome pools proportionally.
         if remaining > 0 {
             let mut other_total: i128 = 0;
             for i in 0..call.outcome_pools.len() {
@@ -871,9 +955,12 @@ impl CallRegistry {
                 outcome_index,
                 user_stake,
                 refund,
-                remaining,
+                remaining, // penalty redistributed to the other pools
+                fee,       // platform fee accrued from the penalty (SC-088)
+                fee_bps,
                 call.outcome_pools.get(outcome_index).unwrap(), // New pool state
                 call.vault_balance,                             // New vault balance
+                platform_fees_total,                            // New PlatformFees total
             ),
         );
     }

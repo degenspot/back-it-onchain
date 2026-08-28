@@ -3,7 +3,7 @@
 use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger, MockAuth, MockAuthInvoke},
-    vec, Address, BytesN, Env, IntoVal, String, Symbol, Val,
+    vec, Address, BytesN, Env, IntoVal, String, Symbol, TryFromVal, Val,
 };
 
 fn default_metadata(env: &Env) -> CreateCallMetadata {
@@ -1903,4 +1903,332 @@ fn test_distribute_dividends_non_admin() {
     let weights = vec![&env, 1i128];
     // Without mock_all_auths, require_auth on admin will fail
     client.distribute_dividends(&stake_token, &to, &weights);
+}
+
+// ── SC-088: Fee accrual to PlatformFees (accrue_fee hook) ────────────────────
+
+/// Return the data payload of the most recent event whose first topic is the
+/// symbol `name`, or `None` if no such event was emitted.
+fn last_event_data(env: &Env, name: &str) -> Option<soroban_sdk::Vec<Val>> {
+    let wanted = Symbol::new(env, name);
+    let events = env.events().all();
+    let mut found: Option<soroban_sdk::Vec<Val>> = None;
+    for i in 0..events.len() {
+        let ev = events.get(i).unwrap();
+        if ev.1.is_empty() {
+            continue;
+        }
+        let topic0 = ev.1.get(0).unwrap();
+        if let Ok(sym) = Symbol::try_from_val(env, &topic0) {
+            if sym == wanted {
+                found = Some(ev.2.into_val(env));
+            }
+        }
+    }
+    found
+}
+
+/// Boilerplate: register the contract, initialize an admin, whitelist a token
+/// and open a call seeded with `initial_stake` on outcome 0.
+fn setup_call<'a>(
+    env: &'a Env,
+    initial_stake: i128,
+) -> (Address, CallRegistryClient<'a>, Address, Address, u64) {
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(env, &contract_id);
+    let admin = Address::generate(env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(env);
+    let stake_token_admin = Address::generate(env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin);
+    let stake_token = stake_token_contract.address();
+    let stake_token_admin_client = token::StellarAssetClient::new(env, &stake_token);
+    stake_token_admin_client.mint(&creator, &1_000_000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &initial_stake,
+        &end_ts,
+        &default_metadata(env),
+    );
+
+    (contract_id, client, creator, stake_token, call_id)
+}
+
+#[test]
+fn test_accrue_fee_stake_1k_at_50bps_yields_5() {
+    // SC-088 acceptance criterion: stake 1_000 at 50 bps → PlatformFees == 5.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, _creator, stake_token, call_id) = setup_call(&env, 100);
+    let staker = Address::generate(&env);
+    token::StellarAssetClient::new(&env, &stake_token).mint(&staker, &10_000);
+
+    assert_eq!(client.get_platform_fees(), 0);
+
+    // participant_count == 1 → fee_bps == 50 → fee = 1_000 * 50 / 10_000 = 5.
+    assert_eq!(client.get_fee_basis_points(&call_id), 50);
+    client.stake_on_call(&call_id, &staker, &1_000, &1u32);
+
+    assert_eq!(client.get_platform_fees(), 5);
+    // Net stake reached the pool: 1_000 - 5 = 995.
+    let call = client.get_call(&call_id);
+    assert_eq!(call.outcome_pools.get(1).unwrap(), 995);
+}
+
+#[test]
+fn test_accrue_fee_emits_fee_accrued_event_with_totals() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, _creator, stake_token, call_id) = setup_call(&env, 100);
+    let staker = Address::generate(&env);
+    token::StellarAssetClient::new(&env, &stake_token).mint(&staker, &100_000);
+
+    client.stake_on_call(&call_id, &staker, &1_000, &1u32);
+
+    let data = last_event_data(&env, "FeeAccrued").expect("FeeAccrued not emitted");
+    let accrued: i128 = data.get(0).unwrap().into_val(&env);
+    let before: i128 = data.get(1).unwrap().into_val(&env);
+    let after: i128 = data.get(2).unwrap().into_val(&env);
+    assert_eq!(accrued, 5);
+    assert_eq!(before, 0);
+    assert_eq!(after, 5);
+
+    // A second stake accrues on top of the existing balance (checked_add).
+    let staker_two = Address::generate(&env);
+    token::StellarAssetClient::new(&env, &stake_token).mint(&staker_two, &100_000);
+    client.stake_on_call(&call_id, &staker_two, &2_000, &1u32);
+
+    let data = last_event_data(&env, "FeeAccrued").expect("FeeAccrued not emitted");
+    let accrued: i128 = data.get(0).unwrap().into_val(&env);
+    let before: i128 = data.get(1).unwrap().into_val(&env);
+    let after: i128 = data.get(2).unwrap().into_val(&env);
+    assert_eq!(accrued, 10); // 2_000 * 50 / 10_000
+    assert_eq!(before, 5);
+    assert_eq!(after, 15);
+    assert_eq!(client.get_platform_fees(), 15);
+}
+
+#[test]
+fn test_accrue_fee_hook_callable_by_registry_itself() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, client, _creator, _stake_token, call_id) = setup_call(&env, 100);
+
+    // caller == env.current_contract_address() → accrual succeeds.
+    let total = client.accrue_fee(&contract_id, &call_id, &7i128);
+    assert_eq!(total, 7);
+    assert_eq!(client.get_platform_fees(), 7);
+
+    let total = client.accrue_fee(&contract_id, &call_id, &13i128);
+    assert_eq!(total, 20);
+    assert_eq!(client.get_platform_fees(), 20);
+
+    let data = last_event_data(&env, "FeeAccrued").expect("FeeAccrued not emitted");
+    let accrued: i128 = data.get(0).unwrap().into_val(&env);
+    let after: i128 = data.get(2).unwrap().into_val(&env);
+    assert_eq!(accrued, 13);
+    assert_eq!(after, 20);
+}
+
+#[test]
+#[should_panic(expected = "Unauthorized")]
+fn test_accrue_fee_non_registry_caller_reverts() {
+    // SC-088 acceptance criterion: a non-registry caller must revert, even with
+    // its own auth mocked — the guard is the address check against
+    // env.current_contract_address(), not just require_auth.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, _creator, _stake_token, call_id) = setup_call(&env, 100);
+    let rando = Address::generate(&env);
+
+    client.accrue_fee(&rando, &call_id, &100i128);
+}
+
+#[test]
+#[should_panic(expected = "Unauthorized")]
+fn test_accrue_fee_admin_is_not_the_registry() {
+    // The contract admin is not the registry address either.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    client.accrue_fee(&admin, &0u64, &100i128);
+}
+
+#[test]
+#[should_panic(expected = "InvalidAmount")]
+fn test_accrue_fee_rejects_zero_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, client, _creator, _stake_token, call_id) = setup_call(&env, 100);
+    client.accrue_fee(&contract_id, &call_id, &0i128);
+}
+
+#[test]
+#[should_panic(expected = "InvalidAmount")]
+fn test_accrue_fee_rejects_negative_amount() {
+    // A negative accrual would silently drain PlatformFees.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, client, _creator, _stake_token, call_id) = setup_call(&env, 100);
+    client.accrue_fee(&contract_id, &call_id, &-1i128);
+}
+
+#[test]
+#[should_panic(expected = "CallNotFound")]
+fn test_accrue_fee_unknown_call_reverts() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, client, _creator, _stake_token, _call_id) = setup_call(&env, 100);
+    client.accrue_fee(&contract_id, &9_999u64, &10i128);
+}
+
+#[test]
+fn test_accrue_fee_on_exit_early() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, client, _creator, stake_token, call_id) = setup_call(&env, 100);
+    let stake_token_client = token::Client::new(&env, &stake_token);
+    let staker = Address::generate(&env);
+    token::StellarAssetClient::new(&env, &stake_token).mint(&staker, &200_000);
+
+    // Stake 100_000 at 50 bps → fee 500, net 99_500.
+    client.stake_on_call(&call_id, &staker, &100_000, &1u32);
+    assert_eq!(client.get_platform_fees(), 500);
+
+    // Exit early on a stake of 99_500:
+    //   refund  = 99_500 * 80 / 100 = 79_600
+    //   penalty = 19_900
+    //   fee     = 19_900 * 50 / 10_000 = 99   (participant_count == 2 → 50 bps)
+    //   pool-bound remainder = 19_801
+    let balance_before = stake_token_client.balance(&staker);
+    client.exit_early(&call_id, &staker);
+    let balance_after = stake_token_client.balance(&staker);
+    assert_eq!(balance_after - balance_before, 79_600);
+
+    // Exit fee accrued on top of the stake fee.
+    assert_eq!(client.get_platform_fees(), 599);
+
+    let data = last_event_data(&env, "FeeAccrued").expect("FeeAccrued not emitted");
+    let accrued: i128 = data.get(0).unwrap().into_val(&env);
+    let before: i128 = data.get(1).unwrap().into_val(&env);
+    let after: i128 = data.get(2).unwrap().into_val(&env);
+    assert_eq!(accrued, 99);
+    assert_eq!(before, 500);
+    assert_eq!(after, 599);
+
+    // The exited pool is emptied; only the fee-net remainder is redistributed.
+    let call = client.get_call(&call_id);
+    assert_eq!(call.outcome_pools.get(1).unwrap(), 0);
+    assert_eq!(call.outcome_pools.get(0).unwrap(), 100 + 19_801);
+    assert_eq!(call.vault_balance, 19_901);
+
+    // Contract balance = pool-bound funds + accrued fees, so the fees are
+    // physically available for distribute_dividends.
+    assert_eq!(stake_token_client.balance(&contract_id), 19_901 + 599);
+
+    // EarlyExit still reports the accrual redundantly.
+    let data = last_event_data(&env, "EarlyExit").expect("EarlyExit not emitted");
+    let remaining: i128 = data.get(3).unwrap().into_val(&env);
+    let fee: i128 = data.get(4).unwrap().into_val(&env);
+    let fee_bps: i128 = data.get(5).unwrap().into_val(&env);
+    let platform_fees_total: i128 = data.get(8).unwrap().into_val(&env);
+    assert_eq!(remaining, 19_801);
+    assert_eq!(fee, 99);
+    assert_eq!(fee_bps, 50);
+    assert_eq!(platform_fees_total, 599);
+}
+
+#[test]
+fn test_accrue_fee_exit_early_below_rounding_threshold_accrues_nothing() {
+    // A penalty smaller than 10_000 / bps rounds to zero: the staker is never
+    // over-charged and PlatformFees is left untouched.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, creator, _stake_token, call_id) = setup_call(&env, 100);
+
+    // stake = 100 → penalty 20 → 20 * 50 / 10_000 == 0.
+    client.exit_early(&call_id, &creator);
+
+    assert_eq!(client.get_platform_fees(), 0);
+    assert!(last_event_data(&env, "FeeAccrued").is_none());
+
+    let call = client.get_call(&call_id);
+    assert_eq!(call.outcome_pools.get(0).unwrap(), 0);
+    assert_eq!(call.outcome_pools.get(1).unwrap(), 20);
+    assert_eq!(call.vault_balance, 20);
+}
+
+#[test]
+fn test_accrue_fee_accumulates_across_stake_and_hook() {
+    // Fees accumulate monotonically across every accrual path and remain
+    // available to distribute_dividends.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, client, _creator, stake_token, call_id) = setup_call(&env, 100);
+    let staker = Address::generate(&env);
+    token::StellarAssetClient::new(&env, &stake_token).mint(&staker, &100_000);
+
+    client.stake_on_call(&call_id, &staker, &10_000, &1u32); // fee 50
+    assert_eq!(client.get_platform_fees(), 50);
+
+    client.accrue_fee(&contract_id, &call_id, &25i128);
+    assert_eq!(client.get_platform_fees(), 75);
+
+    let holder = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    client.update_fee_config(&100u32, &treasury);
+    client.distribute_dividends(
+        &stake_token,
+        &vec![&env, holder.clone()],
+        &vec![&env, 1i128],
+    );
+
+    assert_eq!(token::Client::new(&env, &stake_token).balance(&holder), 75);
+    assert_eq!(client.get_platform_fees(), 0);
+}
+
+// ── SC-090: registry owner getter (treasury ownership mirror source) ─────────
+
+#[test]
+fn test_get_owner_returns_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    assert_eq!(client.get_owner(), admin);
+}
+
+#[test]
+#[should_panic(expected = "Admin not set")]
+fn test_get_owner_before_initialize_reverts() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    client.get_owner();
 }

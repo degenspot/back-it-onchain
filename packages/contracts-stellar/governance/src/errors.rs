@@ -109,4 +109,16 @@ pub enum ContractError {
     InvalidFeeConfig = 40,
     /// Weights vector length does not match recipients (SC-016).
     InvalidWeights = 41,
+
+    // ── Ownership Errors (SC-090) ─────────────────────────────────────────
+    /// Owner has not been set — the contract is uninitialized.
+    OwnerNotSet = 42,
+    /// No in-flight ownership proposal to accept or cancel.
+    NoPendingOwner = 43,
+    /// The ownership transfer delay has not elapsed yet.
+    OwnershipTransferTooEarly = 44,
+    /// Proposed owner is invalid (e.g. identical to the current owner).
+    InvalidOwner = 45,
+    /// The contract this treasury mirrors its owner from is not configured.
+    OwnerSourceNotSet = 46,
 }
