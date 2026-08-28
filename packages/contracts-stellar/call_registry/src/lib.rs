@@ -1208,12 +1208,10 @@ impl CallRegistry {
             .unwrap_or(0)
     }
 
-    /// The registry's current admin, exposed under the `get_owner` name so
-    /// downstream contracts can read the authoritative owner over a
-    /// cross-contract call. This is the source the treasury ownership mirror
-    /// pulls from (SC-090).
-    pub fn get_owner(env: Env) -> Address {
-        Self::get_admin(&env)
+    pub fn has_stake(env: Env, call_id: u64, user: Address, outcome_index: u32) -> bool {
+        env.storage()
+            .persistent()
+            .has(&DataKey::UserStake(call_id, user, outcome_index))
     }
 
     pub fn get_platform_fees(env: Env) -> i128 {

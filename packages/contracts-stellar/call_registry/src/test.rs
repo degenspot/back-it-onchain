@@ -799,6 +799,113 @@ fn test_exit_early_no_position() {
     assert_eq!(client.get_user_stake(&call_id, &staker, &1u32), 0);
 }
 
+// ── SC-019: User Stake Read Tests ─────────────────────────────────────────────
+
+#[test]
+fn test_get_user_stake_missing_returns_zero() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let user = Address::generate(&env);
+
+    // 1. Missing stake returns 0 (not a panic)
+    assert_eq!(client.get_user_stake(&0u64, &user, &0u32), 0);
+    assert!(!client.has_stake(&0u64, &user, &0u32));
+
+    // 3. Confirm the read path is idempotent
+    assert_eq!(client.get_user_stake(&0u64, &user, &0u32), 0);
+    assert!(!client.has_stake(&0u64, &user, &0u32));
+}
+
+#[test]
+fn test_get_user_stake_existing_and_idempotent() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(&env);
+    let staker = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+
+    stake_token_admin_client.mint(&creator, &1000);
+    stake_token_admin_client.mint(&staker, &1000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &default_metadata(&env),
+    );
+
+    client.stake_on_call(&call_id, &staker, &1000, &1u32);
+
+    // 2. Existing stake returns the correct value
+    // participant_count = 1 -> fee = 50bp. 1000 * 50 / 10000 = 5. net = 995
+    assert_eq!(client.get_user_stake(&call_id, &staker, &1u32), 995);
+    assert!(client.has_stake(&call_id, &staker, &1u32));
+
+    // Idempotency / No TTL bump
+    // Note: The Soroban SDK does not currently expose a `get_ttl()` method for persistent
+    // storage in tests, so we cannot explicitly `assert_eq!(ttl_before, ttl_after)`.
+    // This is verified logically (read-only `.get()` operation without `.set()` or `.extend_ttl()`).
+    // Since get_ttl might not be available, we at least verify state doesn't change
+    assert_eq!(client.get_user_stake(&call_id, &staker, &1u32), 995);
+}
+
+#[test]
+fn test_get_user_stake_after_early_exit() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(&env);
+    let staker = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+
+    stake_token_admin_client.mint(&creator, &1000);
+    stake_token_admin_client.mint(&staker, &1000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &default_metadata(&env),
+    );
+
+    client.stake_on_call(&call_id, &staker, &1000, &1u32);
+
+    assert_eq!(client.get_user_stake(&call_id, &staker, &1u32), 995);
+
+    // Early exit
+    client.exit_early(&call_id, &staker);
+
+    // 4. Test interaction with early_exit - should correctly return 0 and has_stake = false
+    assert_eq!(client.get_user_stake(&call_id, &staker, &1u32), 0);
+    assert!(!client.has_stake(&call_id, &staker, &1u32));
+}
+
 #[test]
 #[should_panic(expected = "No stake found")]
 fn test_exit_early_no_stake() {
