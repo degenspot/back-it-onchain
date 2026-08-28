@@ -811,11 +811,11 @@ fn test_get_user_stake_missing_returns_zero() {
     client.initialize(&admin);
 
     let user = Address::generate(&env);
-    
+
     // 1. Missing stake returns 0 (not a panic)
     assert_eq!(client.get_user_stake(&0u64, &user, &0u32), 0);
     assert!(!client.has_stake(&0u64, &user, &0u32));
-    
+
     // 3. Confirm the read path is idempotent
     assert_eq!(client.get_user_stake(&0u64, &user, &0u32), 0);
     assert!(!client.has_stake(&0u64, &user, &0u32));
@@ -856,7 +856,7 @@ fn test_get_user_stake_existing_and_idempotent() {
     // participant_count = 1 -> fee = 50bp. 1000 * 50 / 10000 = 5. net = 995
     assert_eq!(client.get_user_stake(&call_id, &staker, &1u32), 995);
     assert!(client.has_stake(&call_id, &staker, &1u32));
-    
+
     // Idempotency / No TTL bump
     // In soroban tests, TTLs decrease as ledgers advance. We can capture the TTL.
     let key = DataKey::UserStake(call_id, staker.clone(), 1u32);
@@ -896,10 +896,10 @@ fn test_get_user_stake_after_early_exit() {
     client.stake_on_call(&call_id, &staker, &1000, &1u32);
 
     assert_eq!(client.get_user_stake(&call_id, &staker, &1u32), 995);
-    
+
     // Early exit
     client.exit_early(&call_id, &staker);
-    
+
     // 4. Test interaction with early_exit - should correctly return 0 and has_stake = false
     assert_eq!(client.get_user_stake(&call_id, &staker, &1u32), 0);
     assert!(!client.has_stake(&call_id, &staker, &1u32));
