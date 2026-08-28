@@ -2,6 +2,7 @@ use soroban_sdk::{Address, Env};
 
 use crate::ownership::{
     accept_ownership as accept_ownership_internal,
+    cancel_ownership_transfer as cancel_ownership_transfer_internal,
     transfer_ownership as transfer_ownership_internal,
 };
 use crate::roles::*;
@@ -44,13 +45,24 @@ pub fn unpause(e: &Env, caller: &Address) {
 // ---------------------------
 // OWNERSHIP
 // ---------------------------
+/// Step 1 of the two-step transfer — owner-only. Records the proposal; the
+/// owner is unchanged until `accept_ownership`.
 pub fn transfer_ownership(e: &Env, caller: &Address, new_owner: &Address) {
     require_owner(e, caller);
     transfer_ownership_internal(e, new_owner.clone());
 }
 
-pub fn accept_ownership(e: &Env) {
-    accept_ownership_internal(e);
+/// Step 2 — only the proposed owner may accept, and only after the transfer
+/// delay. `caller` is checked against the stored `PendingOwner`, so a third
+/// party cannot push the transfer through on the proposed owner's behalf.
+pub fn accept_ownership(e: &Env, caller: &Address) {
+    accept_ownership_internal(e, caller);
+}
+
+/// Withdraw an in-flight proposal — owner-only.
+pub fn cancel_ownership_transfer(e: &Env, caller: &Address) {
+    require_owner(e, caller);
+    cancel_ownership_transfer_internal(e);
 }
 
 // ---------------------------
