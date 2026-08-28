@@ -1119,16 +1119,20 @@ fn test_stake_on_multi_outcome() {
     client.stake_on_call(&call_id, &staker_a, &1000, &1u32);
     // staker_b stakes on outcome 2 (50bp fee on 500 = 2; net = 498)
     client.stake_on_call(&call_id, &staker_b, &500, &2u32);
+    // A repeat staker choosing another outcome must not increase the
+    // participant count a second time.
+    client.stake_on_call(&call_id, &staker_a, &100, &2u32);
 
     let call = client.get_call(&call_id);
     assert_eq!(call.outcome_pools.get(0).unwrap(), 100); // creator
     assert_eq!(call.outcome_pools.get(1).unwrap(), 995); // staker_a net
-    assert_eq!(call.outcome_pools.get(2).unwrap(), 498); // staker_b net
+    assert_eq!(call.outcome_pools.get(2).unwrap(), 598); // staker_b + staker_a net
     assert_eq!(call.participant_count, 3);
 
     // Verify individual stakes
     assert_eq!(client.get_user_stake(&call_id, &creator, &0u32), 100);
     assert_eq!(client.get_user_stake(&call_id, &staker_a, &1u32), 995);
+    assert_eq!(client.get_user_stake(&call_id, &staker_a, &2u32), 100);
     assert_eq!(client.get_user_stake(&call_id, &staker_b, &2u32), 498);
 }
 
