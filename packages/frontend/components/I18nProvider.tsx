@@ -9,14 +9,12 @@ const messages: Record<string, AbstractIntlMessages> = { en, es };
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {
   const [locale, setLocale] = useState("en");
-  const [_isLoaded, setIsLoaded] = useState(false);
 
   useEffect(() => {
     const saved = localStorage.getItem("app-locale");
     if (saved && (saved === "en" || saved === "es")) {
       setLocale(saved);
     }
-    setIsLoaded(true);
 
     const handleLocaleChange = (e: CustomEvent<{ locale: string }>) => {
       setLocale(e.detail.locale);

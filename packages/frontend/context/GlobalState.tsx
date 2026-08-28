@@ -9,7 +9,7 @@ import React, {
 } from 'react';
 import { useSignMessage } from 'wagmi';
 
-import { api, setAuthToken } from '../lib/apiClient';
+import { setAuthToken } from '../lib/apiClient';
 import { fetchNonce, verifySignature } from '../lib/authService';
 import { AuthState, Chain } from '@/app';
 
