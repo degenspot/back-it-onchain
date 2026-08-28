@@ -141,7 +141,6 @@ export function CallCard({ call }: CallCardProps) {
 
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showReportModal]);
 
   // Restore focus to the report trigger when the modal closes.
@@ -232,14 +231,12 @@ export function CallCard({ call }: CallCardProps) {
                     role="menu"
                     aria-label="Card options"
                     className="absolute right-0 top-full mt-1 w-40 bg-card border border-border rounded-lg shadow-lg z-50 py-1"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                    }}
                   >
                     <button
                       role="menuitem"
-                      onClick={() => {
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
                         setShowOptions(false);
                         setShowReportModal(true);
                       }}
@@ -333,11 +330,9 @@ export function CallCard({ call }: CallCardProps) {
           aria-labelledby="report-modal-title"
           aria-describedby="report-modal-desc"
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
-          onClick={(e) => e.stopPropagation()}
         >
           <div
             className="bg-card border border-border rounded-xl p-6 w-full max-w-sm shadow-xl"
-            onClick={(e) => e.stopPropagation()}
           >
             <h2 id="report-modal-title" className="text-xl font-bold mb-4">Report Content</h2>
             <p id="report-modal-desc" className="text-sm text-muted-foreground mb-4">

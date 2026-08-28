@@ -100,10 +100,10 @@ export function Feed() {
     return (
         <div className="space-y-4">
             {/* Tabs */}
-            <div className="flex gap-2 mb-4">
-                <button onClick={() => setTab('for-you')} className={`px-4 py-2 rounded-lg text-sm font-medium ${tab === 'for-you' ? 'bg-primary text-primary-foreground' : 'bg-secondary hover:bg-secondary/80'}`}>For You</button>
-                <button onClick={() => setTab('following')} className={`px-4 py-2 rounded-lg text-sm font-medium ${tab === 'following' ? 'bg-primary text-primary-foreground' : 'bg-secondary hover:bg-secondary/80'}`}>Following</button>
-                <button onClick={() => setTab('newest')} className={`px-4 py-2 rounded-lg text-sm font-medium ${tab === 'newest' ? 'bg-primary text-primary-foreground' : 'bg-secondary hover:bg-secondary/80'}`}>Newest</button>
+            <div role="tablist" aria-label="Calls feed" className="flex gap-2 mb-4">
+                <button role="tab" aria-selected={tab === 'for-you'} onClick={() => setTab('for-you')} className={`px-4 py-2 rounded-lg text-sm font-medium ${tab === 'for-you' ? 'bg-primary text-primary-foreground' : 'bg-secondary hover:bg-secondary/80'}`}>For You</button>
+                <button role="tab" aria-selected={tab === 'following'} onClick={() => setTab('following')} className={`px-4 py-2 rounded-lg text-sm font-medium ${tab === 'following' ? 'bg-primary text-primary-foreground' : 'bg-secondary hover:bg-secondary/80'}`}>Following</button>
+                <button role="tab" aria-selected={tab === 'newest'} onClick={() => setTab('newest')} className={`px-4 py-2 rounded-lg text-sm font-medium ${tab === 'newest' ? 'bg-primary text-primary-foreground' : 'bg-secondary hover:bg-secondary/80'}`}>Newest</button>
             </div>
 
             {/* Chain Filter Buttons */}

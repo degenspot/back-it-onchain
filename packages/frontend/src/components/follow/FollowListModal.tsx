@@ -87,7 +87,10 @@ export default function FollowListModal({
   if (!isOpen) return null;
 
   return (
-    <div
+    <button
+      type="button"
+      tabIndex={-1}
+      aria-label="Close"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
@@ -182,6 +185,6 @@ export default function FollowListModal({
           )}
         </div>
       </div>
-    </div>
+    </button>
   );
 }

@@ -40,13 +40,13 @@ export default function StakingModal({ open, call, onClose }: { open: boolean; c
   // Trap focus within the dialog.
   useEffect(() => {
     if (!open) return;
-    const dialog = dialogRef.current;
-    if (!dialog) return;
 
     function handleTab(e: KeyboardEvent) {
       if (e.key !== 'Tab') return;
+      const current = dialogRef.current;
+      if (!current) return;
 
-      const focusable = dialog.querySelectorAll<HTMLElement>(
+      const focusable = current.querySelectorAll<HTMLElement>(
         'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
       );
       if (focusable.length === 0) return;

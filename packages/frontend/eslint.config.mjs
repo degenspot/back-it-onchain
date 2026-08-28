@@ -12,7 +12,13 @@ const compat = new FlatCompat({
 
 const eslintConfig = [
   ...compat.extends("next/core-web-vitals", "next/typescript"),
-  jsxA11y.flatConfigs.recommended,
+  // Apply the jsx-a11y recommended rules. The `next` configs already register
+  // the `jsx-a11y` plugin, so we only take its rules (not its `plugins` key)
+  // to avoid an ESLint "cannot redefine plugin" flat-config error.
+  {
+    rules: jsxA11y.flatConfigs.recommended.rules,
+    languageOptions: jsxA11y.flatConfigs.recommended.languageOptions,
+  },
 ];
 
 export default eslintConfig;

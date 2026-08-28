@@ -152,8 +152,11 @@ export function WalletConnectButton() {
         {/* Chain Dropdown Menu */}
         {isChainMenuOpen && (
           <>
-            <div
-              className="fixed inset-0 z-40"
+            <button
+              type="button"
+              tabIndex={-1}
+              aria-label="Close chain selector"
+              className="fixed inset-0 z-40 cursor-default"
               onClick={() => setIsChainMenuOpen(false)}
             />
             <div
@@ -236,8 +239,11 @@ export function WalletConnectButton() {
           {/* Wallet Dropdown Menu */}
           {isWalletMenuOpen && (
             <>
-              <div
-                className="fixed inset-0 z-40"
+              <button
+                type="button"
+                tabIndex={-1}
+                aria-label="Close wallet menu"
+                className="fixed inset-0 z-40 cursor-default"
                 onClick={() => setIsWalletMenuOpen(false)}
               />
               <div

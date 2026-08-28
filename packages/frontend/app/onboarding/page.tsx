@@ -253,8 +253,9 @@ function OnboardingContent() {
 
                                 <div className="space-y-4">
                                     <div>
-                                        <label className="text-sm font-medium mb-1.5 block">Username</label>
+                                        <label htmlFor="onboard-username" className="text-sm font-medium mb-1.5 block">Username</label>
                                         <input
+                                            id="onboard-username"
                                             type="text"
                                             placeholder="@username"
                                             value={username}
@@ -264,8 +265,9 @@ function OnboardingContent() {
                                         />
                                     </div>
                                     <div>
-                                        <label className="text-sm font-medium mb-1.5 block">Bio (Optional)</label>
+                                        <label htmlFor="onboard-bio" className="text-sm font-medium mb-1.5 block">Bio (Optional)</label>
                                         <textarea
+                                            id="onboard-bio"
                                             placeholder="What's your trading thesis?"
                                             value={bio}
                                             onChange={(e) => setBio(e.target.value)}

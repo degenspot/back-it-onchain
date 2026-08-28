@@ -193,7 +193,7 @@ export default function ProfilePage() {
                             </div>
                             <div className="flex items-center gap-1">
                                 <LinkIcon className="h-3 w-3" />
-                                <a href="#" className="hover:text-primary hover:underline">backit.xyz</a>
+                                <a href="https://backit.xyz" className="hover:text-primary hover:underline">backit.xyz</a>
                             </div>
                             {joinedDateLabel && (
                                 <div className="flex items-center gap-1">
