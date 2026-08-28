@@ -1121,6 +1121,12 @@ impl CallRegistry {
             .unwrap_or(0)
     }
 
+    pub fn has_stake(env: Env, call_id: u64, user: Address, outcome_index: u32) -> bool {
+        env.storage()
+            .persistent()
+            .has(&DataKey::UserStake(call_id, user, outcome_index))
+    }
+
     pub fn get_platform_fees(env: Env) -> i128 {
         env.storage()
             .persistent()
