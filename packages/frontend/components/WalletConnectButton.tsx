@@ -7,7 +7,7 @@
 
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAccount } from "wagmi";
 import { ChevronDown, LogOut } from "lucide-react";
 import {
@@ -80,6 +80,20 @@ export function WalletConnectButton() {
 
   const wallet = getCurrentWallet();
 
+  // Close any open dropdown menu when the Escape key is pressed.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setIsChainMenuOpen(false);
+        setIsWalletMenuOpen(false);
+      }
+    }
+    if (isChainMenuOpen || isWalletMenuOpen) {
+      document.addEventListener('keydown', onKeyDown);
+      return () => document.removeEventListener('keydown', onKeyDown);
+    }
+  }, [isChainMenuOpen, isWalletMenuOpen]);
+
   /**
    * Handle Stellar wallet connection
    */
@@ -123,6 +137,8 @@ export function WalletConnectButton() {
           onClick={() => setIsChainMenuOpen(!isChainMenuOpen)}
           className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-secondary/50 hover:bg-secondary border border-border transition-colors"
           aria-label="Select blockchain"
+          aria-haspopup="menu"
+          aria-expanded={isChainMenuOpen}
         >
           <span className="text-sm">{wallet.chainEmoji}</span>
           <span className="text-xs font-medium hidden sm:inline">
@@ -140,8 +156,13 @@ export function WalletConnectButton() {
               className="fixed inset-0 z-40"
               onClick={() => setIsChainMenuOpen(false)}
             />
-            <div className="absolute top-full mt-2 right-0 w-36 bg-card border border-border rounded-lg shadow-lg z-50 overflow-hidden">
+            <div
+              role="menu"
+              aria-label="Select blockchain"
+              className="absolute top-full mt-2 right-0 w-36 bg-card border border-border rounded-lg shadow-lg z-50 overflow-hidden"
+            >
               <button
+                role="menuitem"
                 onClick={() => handleChainSwitch("base")}
                 className={`w-full flex items-center gap-2 px-3 py-2.5 text-left transition-colors ${
                   selectedChain === "base"
@@ -156,6 +177,7 @@ export function WalletConnectButton() {
                 )}
               </button>
               <button
+                role="menuitem"
                 onClick={() => handleChainSwitch("stellar")}
                 className={`w-full flex items-center gap-2 px-3 py-2.5 text-left transition-colors ${
                   selectedChain === "stellar"
@@ -198,6 +220,9 @@ export function WalletConnectButton() {
           <button
             onClick={() => setIsWalletMenuOpen(!isWalletMenuOpen)}
             className="flex items-center gap-2 px-4 py-2 rounded-lg bg-secondary hover:bg-secondary/80 border border-border transition-colors"
+            aria-haspopup="menu"
+            aria-expanded={isWalletMenuOpen}
+            aria-label="Wallet options"
           >
             <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
             <span className="text-sm font-medium font-mono">
@@ -215,9 +240,14 @@ export function WalletConnectButton() {
                 className="fixed inset-0 z-40"
                 onClick={() => setIsWalletMenuOpen(false)}
               />
-              <div className="absolute top-full mt-2 right-0 w-48 bg-card border border-border rounded-lg shadow-lg z-50 overflow-hidden">
+              <div
+                role="menu"
+                aria-label="Wallet options"
+                className="absolute top-full mt-2 right-0 w-48 bg-card border border-border rounded-lg shadow-lg z-50 overflow-hidden"
+              >
                 {/* Copy Address */}
                 <button
+                  role="menuitem"
                   onClick={() => {
                     if (stellarAddress) {
                       navigator.clipboard.writeText(stellarAddress);
@@ -238,6 +268,7 @@ export function WalletConnectButton() {
 
                 {/* Disconnect */}
                 <button
+                  role="menuitem"
                   onClick={handleStellarDisconnect}
                   className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-destructive/10 text-destructive transition-colors border-t border-border"
                 >
@@ -286,6 +317,7 @@ export function WalletConnectButton() {
               <button
                 onClick={() => setSelectedChain("base")}
                 className="text-yellow-600/50 hover:text-yellow-600 dark:text-yellow-400/50 dark:hover:text-yellow-400"
+                aria-label="Dismiss Freighter warning and switch to Base"
               >
                 ✕
               </button>
