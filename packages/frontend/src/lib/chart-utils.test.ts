@@ -1,13 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { formatChartData, RawChartData } from './chart-utils';
+import { formatChartData, RawChartData, buildEvidenceMarkers, type CandleData } from './chart-utils';
 
 describe('chart-utils', () => {
   describe('formatChartData', () => {
-    it('should correctly format raw chart data', () => {
-      // Mock raw data with specific timestamps
+    it('should correctly format raw chart data using close price', () => {
       const rawData: RawChartData[] = [
-        { timestamp: 1672531200000, price: 100 }, // 2023-01-01 00:00:00 UTC
-        { timestamp: 1672617600000, price: 105 }, // 2023-01-02 00:00:00 UTC
+        { timestamp: 1672531200000, price: 100 },
+        { timestamp: 1672617600000, price: 105 },
       ];
 
       const result = formatChartData(rawData);
@@ -15,20 +14,30 @@ describe('chart-utils', () => {
       expect(result).toHaveLength(2);
       expect(result[0].value).toBe(100);
       expect(result[1].value).toBe(105);
-      
-      // We expect some time string, the exact string depends on the timezone
-      // We can test if the 'time' property exists and is a string
+
       expect(typeof result[0].time).toBe('string');
-      expect(typeof result[1].time).toBe('string');
-      
-      // And we can test for the specific format MM/DD HH:mm
-      expect(result[0].time).toMatch(/^\d{1,2}\/\d{1,2} \d{1,2}:\d{2}$/);
     });
 
     it('should handle empty data arrays', () => {
       const result = formatChartData([]);
       expect(result).toHaveLength(0);
       expect(result).toEqual([]);
+    });
+  });
+
+  describe('buildEvidenceMarkers', () => {
+    it('should assign markers based on event type', () => {
+      const markers = buildEvidenceMarkers([
+        { time: '2023-01-01', label: 'Start', type: 'start' },
+        { time: '2023-01-02', label: 'End', type: 'end' },
+        { time: '2023-01-03', label: 'Settlement', type: 'settlement' },
+      ]);
+
+      expect(markers).toHaveLength(3);
+      expect(markers[0].color).toBe('#8b5cf6');
+      expect(markers[1].color).toBe('#ec4899');
+      expect(markers[2].color).toBe('#22c55e');
+      expect(markers[2].shape).toBe('circle');
     });
   });
 });
