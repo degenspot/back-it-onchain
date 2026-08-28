@@ -1,4 +1,4 @@
-#![cfg(test)]
+﻿#![cfg(test)]
 
 use super::*;
 use soroban_sdk::{
@@ -15,7 +15,7 @@ fn default_metadata(env: &Env) -> CreateCallMetadata {
     }
 }
 
-// ── Existing tests (preserved) ────────────────────────────────────────────────
+// ΓöÇΓöÇ Existing tests (preserved) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 #[test]
 fn test_create_call() {
@@ -69,7 +69,7 @@ fn test_create_call() {
 #[test]
 #[should_panic]
 fn test_create_call_requires_creator_auth() {
-    // #314 — create_call must reject a call that isn't authorized by the
+    // #314 ΓÇö create_call must reject a call that isn't authorized by the
     // declared creator, even if some other address's auth is mocked.
     let env = Env::default();
 
@@ -105,7 +105,7 @@ fn test_create_call_requires_creator_auth() {
     }]);
     client.whitelist_token_admin(&stake_token);
 
-    // No auth mocked for `creator` at all — create_call must panic on
+    // No auth mocked for `creator` at all ΓÇö create_call must panic on
     // `creator.require_auth()` before any state or token transfer happens.
     let end_ts = env.ledger().timestamp() + 1000;
     client.create_call(
@@ -343,19 +343,19 @@ fn test_unpause_requires_admin_auth() {
     client.unpause();
 }
 
-// ── Issue #161: Dynamic surge fee ────────────────────────────────────────────
+// ΓöÇΓöÇ Issue #161: Dynamic surge fee ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 #[test]
 fn test_surge_fee_basis_points() {
-    // 0 participants → 50 bp
+    // 0 participants ΓåÆ 50 bp
     assert_eq!(compute_fee_basis_points(0), 50);
-    // 10 participants → 55 bp
+    // 10 participants ΓåÆ 55 bp
     assert_eq!(compute_fee_basis_points(10), 55);
-    // 100 participants → 100 bp
+    // 100 participants ΓåÆ 100 bp
     assert_eq!(compute_fee_basis_points(100), 100);
-    // 300 participants → capped at 200 bp
+    // 300 participants ΓåÆ capped at 200 bp
     assert_eq!(compute_fee_basis_points(300), 200);
-    // 1000 participants → still capped at 200 bp
+    // 1000 participants ΓåÆ still capped at 200 bp
     assert_eq!(compute_fee_basis_points(1000), 200);
 }
 
@@ -387,7 +387,7 @@ fn test_stake_applies_surge_fee() {
         &default_metadata(&env),
     );
 
-    // participant_count = 1 → fee_bps = 50; stake 10_000 → fee = 50, net = 9_950
+    // participant_count = 1 ΓåÆ fee_bps = 50; stake 10_000 ΓåÆ fee = 50, net = 9_950
     client.stake_on_call(&call_id, &staker, &10_000, &1u32);
 
     let call = client.get_call(&call_id);
@@ -425,11 +425,11 @@ fn test_get_fee_basis_points() {
         &default_metadata(&env),
     );
 
-    // 1 participant → 50 bp
+    // 1 participant ΓåÆ 50 bp
     assert_eq!(client.get_fee_basis_points(&call_id), 50);
 }
 
-// ── Issue #160: distribute_dividends ─────────────────────────────────────────
+// ΓöÇΓöÇ Issue #160: distribute_dividends ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 #[test]
 fn test_distribute_dividends() {
@@ -467,7 +467,7 @@ fn test_distribute_dividends() {
     let holder_a = Address::generate(&env);
     let holder_b = Address::generate(&env);
 
-    // Distribute: holder_a has weight 3, holder_b has weight 2 → total 5
+    // Distribute: holder_a has weight 3, holder_b has weight 2 ΓåÆ total 5
     // holder_a gets 50 * 3/5 = 30, holder_b gets 50 * 2/5 = 20
     let stakers = vec![&env, (holder_a.clone(), 3i128), (holder_b.clone(), 2i128)];
     client.distribute_dividends(&stake_token, &stakers);
@@ -496,7 +496,7 @@ fn test_distribute_dividends_no_fees() {
     client.distribute_dividends(&stake_token, &stakers);
 }
 
-// ── Issue #170: Decentralized Token Whitelisting ──────────────────────────────
+// ΓöÇΓöÇ Issue #170: Decentralized Token Whitelisting ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 #[test]
 fn test_propose_and_vouch_whitelist() {
@@ -522,13 +522,13 @@ fn test_propose_and_vouch_whitelist() {
 
     client.propose_token(&proposer, &token);
 
-    // Two vouches — not yet whitelisted
+    // Two vouches ΓÇö not yet whitelisted
     client.vouch_for_token(&staker1, &token);
     assert!(!client.is_token_whitelisted(&token));
     client.vouch_for_token(&staker2, &token);
     assert!(!client.is_token_whitelisted(&token));
 
-    // Third vouch → auto-whitelisted
+    // Third vouch ΓåÆ auto-whitelisted
     client.vouch_for_token(&staker3, &token);
     assert!(client.is_token_whitelisted(&token));
 }
@@ -549,7 +549,7 @@ fn test_duplicate_vouch_ignored() {
     let proposer = Address::generate(&env);
     client.propose_token(&proposer, &token);
 
-    // Same staker vouches twice — only one counted
+    // Same staker vouches twice ΓÇö only one counted
     client.vouch_for_token(&staker, &token);
     client.vouch_for_token(&staker, &token);
 
@@ -611,7 +611,7 @@ fn test_create_call_rejects_non_whitelisted_token() {
     let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
     stake_token_admin_client.mint(&creator, &1000);
 
-    // No whitelist call — should panic
+    // No whitelist call ΓÇö should panic
     client.create_call(
         &creator,
         &stake_token,
@@ -621,7 +621,7 @@ fn test_create_call_rejects_non_whitelisted_token() {
     );
 }
 
-// ── Issue #169: Storage TTL & Archival ───────────────────────────────────────
+// ΓöÇΓöÇ Issue #169: Storage TTL & Archival ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 #[test]
 fn test_archive_settled_call() {
@@ -690,7 +690,7 @@ fn test_archive_unsettled_call_panics() {
     client.archive_call(&call_id);
 }
 
-// ── Early Exit (Hedging / Position Closing) ────────────────────────────────────
+// ΓöÇΓöÇ Early Exit (Hedging / Position Closing) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 #[test]
 fn test_exit_early_yes_position() {
@@ -821,7 +821,7 @@ fn test_exit_early_no_stake() {
         &default_metadata(&env),
     );
 
-    // rando has no stake — should panic
+    // rando has no stake ΓÇö should panic
     client.exit_early(&call_id, &rando);
 }
 
@@ -890,7 +890,7 @@ fn test_exit_early_after_settled() {
     env.ledger().set_timestamp(end_ts + 1);
     client.finalize_call(&call_id, &0u32, &1000i128, &creator);
 
-    // Try to exit early — should panic
+    // Try to exit early ΓÇö should panic
     client.exit_early(&call_id, &creator);
 }
 
@@ -1026,7 +1026,7 @@ fn test_exit_early_paused() {
     client.exit_early(&call_id, &creator);
 }
 
-// ── Multi-Outcome Markets (Scalar/Categorical) ─────────────────────────────────
+// ΓöÇΓöÇ Multi-Outcome Markets (Scalar/Categorical) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 fn multi_metadata(env: &Env, num_outcomes: u32) -> CreateCallMetadata {
     CreateCallMetadata {
@@ -1211,7 +1211,7 @@ fn test_withdraw_multi_outcome() {
     env.ledger().set_timestamp(end_ts + 1);
     client.finalize_call(&call_id, &1u32, &2000i128, &creator);
 
-    // staker_a withdraws — should get their stake + proportional share of losing pools
+    // staker_a withdraws ΓÇö should get their stake + proportional share of losing pools
     // Winners pool = 995, losers pool = 100 + 498 = 598
     // Payout = 995 + (995 * 598 / 995) = 995 + 598 = 1593
     let balance_before = stake_token_client.balance(&staker_a);
@@ -1369,11 +1369,268 @@ fn test_exit_early_multi_outcome() {
     let call = client.get_call(&call_id);
     assert_eq!(call.outcome_pools.get(1).unwrap(), 0);
     // Other pools (0, 2, 3) should have the 199 penalty distributed proportionally
-    // outcome 0 = 100, outcome 2 = 498, outcome 3 = 0 → total other = 598
+    // outcome 0 = 100, outcome 2 = 498, outcome 3 = 0 ΓåÆ total other = 598
     // outcome 0 gets: 100 + 199 * 100 / 598 = 100 + 33 = 133
     // outcome 2 gets: 498 + 199 * 498 / 598 = 498 + 165 = 663
     // outcome 3 gets: 0 (no existing stake, no share)
     assert_eq!(call.outcome_pools.get(0).unwrap(), 133);
     assert_eq!(call.outcome_pools.get(2).unwrap(), 663);
     assert_eq!(call.outcome_pools.get(3).unwrap(), 0);
+}
+
+fn test_surge_fee_boundaries() {
+    // Exact boundary values around each 10-participant step.
+    //         participants ΓåÆ fee bps
+    assert_eq!(compute_fee_basis_points(0), 50); //  0 ΓåÆ  50
+    assert_eq!(compute_fee_basis_points(9), 50); //  9 ΓåÆ  50
+    assert_eq!(compute_fee_basis_points(10), 55); // 10 ΓåÆ  55
+    assert_eq!(compute_fee_basis_points(19), 55); // 19 ΓåÆ  55
+    assert_eq!(compute_fee_basis_points(20), 60); // 20 ΓåÆ  60
+    assert_eq!(compute_fee_basis_points(99), 95); // 99 ΓåÆ  95
+    assert_eq!(compute_fee_basis_points(100), 100); // 100 ΓåÆ 100
+    assert_eq!(compute_fee_basis_points(299), 195); // 299 ΓåÆ 195
+    assert_eq!(compute_fee_basis_points(300), 200); // 300 ΓåÆ 200 (cap)
+    assert_eq!(compute_fee_basis_points(301), 200); // 301 ΓåÆ 200 (cap)
+}
+
+#[test]
+fn test_fee_never_exceeds_200() {
+    // Property test: for any participant count 0..500 the fee never dips below
+    // the 50 bp base nor rises above the 200 bp cap.
+    for count in 0..500u32 {
+        let fee = compute_fee_basis_points(count);
+        assert!(
+            (50..=200).contains(&fee),
+            "fee {} out of [50, 200] for participant_count {}",
+            fee,
+            count
+        );
+    }
+}
+
+// ── Issue #319 (SC-006): Phoenix-compatible vault yield layer ─────────────────
+
+// Minimal no-op vault contract so the contract's vault_deposit / vault_withdraw
+// calls resolve against a real (registered) address without needing an external
+// lending protocol.
+#[contract]
+struct MockVault;
+
+#[contractimpl]
+impl MockVault {
+    pub fn deposit(_env: Env, _from: Address, _amount: i128) {}
+    pub fn withdraw(_env: Env, _to: Address, _amount: i128) {}
+}
+
+#[test]
+fn test_vault_deposit_on_create() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let mock_vault_id = env.register_contract(None, MockVault);
+    client.set_vault(&mock_vault_id);
+
+    let creator = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+    stake_token_admin_client.mint(&creator, &1000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &default_metadata(&env),
+    );
+
+    // The creator's stake is mirrored into the vault_balance tracking.
+    let call = client.get_call(&call_id);
+    assert_eq!(call.vault_balance, 100);
+    assert_eq!(call.outcome_pools.get(0).unwrap(), 100);
+}
+
+#[test]
+fn test_vault_deposit_on_stake() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let mock_vault_id = env.register_contract(None, MockVault);
+    client.set_vault(&mock_vault_id);
+
+    let creator = Address::generate(&env);
+    let staker = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+    stake_token_admin_client.mint(&creator, &1000);
+    stake_token_admin_client.mint(&staker, &1000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &default_metadata(&env),
+    );
+
+    // participant_count = 1 ΓåÆ 50 bp; stake 1000 ΓåÆ fee 5, net 995
+    client.stake_on_call(&call_id, &staker, &1000, &1u32);
+
+    let call = client.get_call(&call_id);
+    // vault_balance increased by the net_amount (995): 100 + 995 = 1095
+    assert_eq!(call.vault_balance, 1095);
+    assert_eq!(call.outcome_pools.get(1).unwrap(), 995);
+    assert_eq!(call.participant_count, 2);
+}
+
+#[test]
+fn test_vault_withdraw_on_finalize() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let mock_vault_id = env.register_contract(None, MockVault);
+    client.set_vault(&mock_vault_id);
+
+    let creator = Address::generate(&env);
+    let staker = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_client = token::Client::new(&env, &stake_token);
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+    stake_token_admin_client.mint(&creator, &1000);
+    stake_token_admin_client.mint(&staker, &1000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &default_metadata(&env),
+    );
+
+    // Staker backs the losing side (outcome 1): 1000 ΓåÆ net 995
+    client.stake_on_call(&call_id, &staker, &1000, &1u32);
+
+    let staker_balance_before = stake_token_client.balance(&staker);
+
+    // Finalize with outcome 0 winning: losers_pool = 995 ΓåÆ gas_fee = 4
+    env.ledger().set_timestamp(end_ts + 1);
+    client.finalize_call(&call_id, &0u32, &2000i128, &creator);
+
+    let call = client.get_call(&call_id);
+    assert!(call.settled);
+
+    // Vault balance before finalize = 100 + 995 = 1095; gas_fee 4 withdrawn ΓåÆ 1091
+    assert_eq!(call.vault_balance, 1091);
+
+    // The gas fee was paid out to the caller from the contract's pocket
+    // (the mock vault withdraw makes the funds available for transfer).
+    let caller_gain = stake_token_client.balance(&creator) - (1000 - 100);
+    assert_eq!(caller_gain, 4);
+
+    // The losing staker never got anything yet.
+    assert_eq!(stake_token_client.balance(&staker), staker_balance_before);
+}
+
+#[test]
+#[should_panic]
+fn test_set_vault_requires_admin() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    env.mock_auths(&[MockAuth {
+        address: &admin,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "initialize",
+            args: (&admin,).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.initialize(&admin);
+
+    // A non-admin user tries to set the vault ΓÇö must panic on admin.require_auth.
+    let attacker = Address::generate(&env);
+    let vault = Address::generate(&env);
+    env.mock_auths(&[MockAuth {
+        address: &attacker,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "set_vault",
+            args: (&vault,).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.set_vault(&vault);
+}
+
+#[test]
+fn test_no_vault_path_unchanged() {
+    // Baseline: without any vault configured, the full lifecycle still works and
+    // vault_balance tracking behaves exactly as before.
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(&env);
+    let staker = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+    stake_token_admin_client.mint(&creator, &1000);
+    stake_token_admin_client.mint(&staker, &1000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &default_metadata(&env),
+    );
+
+    let call = client.get_call(&call_id);
+    assert_eq!(call.vault_balance, 100);
+
+    client.stake_on_call(&call_id, &staker, &1000, &1u32);
+    let call = client.get_call(&call_id);
+    assert_eq!(call.vault_balance, 1095);
+    assert_eq!(call.outcome_pools.get(1).unwrap(), 995);
+
+    env.ledger().set_timestamp(end_ts + 1);
+    client.finalize_call(&call_id, &0u32, &2000i128, &creator);
+    let call = client.get_call(&call_id);
+    assert!(call.settled);
+    assert_eq!(call.vault_balance, 1091);
 }
