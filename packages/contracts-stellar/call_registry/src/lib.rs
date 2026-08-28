@@ -74,6 +74,9 @@ pub struct TokenProposal {
     pub proposer: Address,
     /// Addresses of authorized stakers who have vouched for this token.
     pub vouches: Vec<Address>,
+    /// Ledger timestamp at which this proposal was created. Used to expire
+    /// stale proposals after `PROPOSAL_EXPIRY_SECS` (issue #323).
+    pub created_at: u64,
 }
 
 /// Platform fee configuration (SC-017).
@@ -85,6 +88,9 @@ pub struct FeeConfig {
     pub bps: u32,
     pub treasury: Address,
 }
+
+/// Proposal expires after 7 days (in seconds); anyone may then clean it up.
+const PROPOSAL_EXPIRY_SECS: u64 = 604_800;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -219,6 +225,22 @@ impl CallRegistry {
             .persistent()
             .get(&DataKey::AuthorizedStaker(staker.clone()))
             .unwrap_or(false)
+    }
+
+    /// True if `user` has already staked on this call on ANY outcome index
+    /// (used to deduplicate `participant_count`, issue #320).
+    fn user_has_stake_in_call(env: &Env, call: &Call, call_id: u64, user: &Address) -> bool {
+        for i in 0..call.outcome_pools.len() {
+            let stake: i128 = env
+                .storage()
+                .persistent()
+                .get(&DataKey::UserStake(call_id, user.clone(), i as u32))
+                .unwrap_or(0);
+            if stake > 0 {
+                return true;
+            }
+        }
+        false
     }
 
     // ── Vault helpers ─────────────────────────────────────────────────────────
@@ -569,6 +591,7 @@ impl CallRegistry {
         let proposal = TokenProposal {
             proposer: proposer.clone(),
             vouches: Vec::new(&env),
+            created_at: env.ledger().timestamp(),
         };
         env.storage()
             .persistent()
@@ -632,6 +655,58 @@ impl CallRegistry {
             .persistent()
             .get(&DataKey::TokenProposal(token))
             .expect("No proposal found")
+    }
+
+    /// Non-panicking view of a pending token proposal (issue #322/#323).
+    pub fn get_proposal(env: Env, token: Address) -> Option<TokenProposal> {
+        env.storage().persistent().get(&DataKey::TokenProposal(token))
+    }
+
+    /// Whether a pending proposal for `token` has expired past the 7-day window.
+    pub fn is_proposal_expired(env: Env, token: Address) -> bool {
+        match env
+            .storage()
+            .persistent()
+            .get::<DataKey, TokenProposal>(&DataKey::TokenProposal(token))
+        {
+            Some(p) => env
+                .ledger()
+                .timestamp()
+                .saturating_sub(p.created_at)
+                > PROPOSAL_EXPIRY_SECS,
+            None => false,
+        }
+    }
+
+    /// Admin can reject (and remove) a pending token proposal.
+    /// Emits `TokenRejected`. Whitelisted tokens are unaffected.
+    pub fn reject_proposal(env: Env, token: Address) {
+        let admin = Self::get_admin(&env);
+        admin.require_auth();
+
+        let key = DataKey::TokenProposal(token.clone());
+        if !env.storage().persistent().has(&key) {
+            panic!("No proposal for token");
+        }
+        env.storage().persistent().remove(&key);
+        env.events()
+            .publish((Symbol::new(&env, "TokenRejected"), token), ());
+    }
+
+    /// Anyone may clean up an expired proposal to reclaim state rent.
+    pub fn cleanup_expired_proposal(env: Env, token: Address) {
+        let key = DataKey::TokenProposal(token);
+        let proposal: TokenProposal = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .expect("No proposal for token");
+        if env.ledger().timestamp().saturating_sub(proposal.created_at) <= PROPOSAL_EXPIRY_SECS {
+            panic!("Proposal not yet expired");
+        }
+        env.storage().persistent().remove(&key);
+        env.events()
+            .publish((Symbol::new(&env, "TokenProposalCleaned"),), ());
     }
 
     pub fn is_authorized_staker(env: Env, staker: Address) -> bool {
@@ -825,7 +900,11 @@ impl CallRegistry {
             .vault_balance
             .checked_add(net_amount)
             .expect("Arithmetic overflow");
-        call.participant_count += 1;
+        // Participant count is gated on the user's first stake anywhere on the
+        // call, so re-staking another outcome doesn't inflate the surge fee.
+        if !Self::user_has_stake_in_call(&env, &call, call_id, &staker) {
+            call.participant_count += 1;
+        }
         env.storage().persistent().set(&key, &call);
         // Bump TTL on every stake interaction (issue #169)
         bump_persistent_ttl(&env, &key);
@@ -1119,6 +1198,108 @@ impl CallRegistry {
                 call.outcome_pools.get(outcome_index).unwrap(), // New pool state
                 call.vault_balance,                             // New vault balance
                 platform_fees_total,                            // New PlatformFees total
+            ),
+        );
+    }
+
+    // ── Early exit with penalty (issue #321) ──────────────────────────────────
+
+    /// Let a user exit a specific position before `end_ts`, burning a 30% penalty
+    /// and charging a proportional surge fee. Refund = user_stake - penalty - fee.
+    /// Further exits after the stake is zeroed revert.
+    pub fn early_exit(env: Env, call_id: u64, user: Address, outcome_index: u32) {
+        Self::assert_not_paused(&env);
+        user.require_auth();
+
+        let key = DataKey::Call(call_id);
+        let mut call: Call = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .expect("Call does not exist");
+
+        if call.settled {
+            panic!("Call settled");
+        }
+        if env.ledger().timestamp() >= call.end_ts {
+            panic!("Call ended");
+        }
+        if outcome_index >= call.outcome_pools.len() as u32 {
+            panic!("Invalid outcome index");
+        }
+
+        let stake_key = DataKey::UserStake(call_id, user.clone(), outcome_index);
+        let user_stake: i128 = env
+            .storage()
+            .persistent()
+            .get(&stake_key)
+            .expect("No stake found");
+        if user_stake <= 0 {
+            panic!("No stake found");
+        }
+
+        // 30% burn penalty + proportional surge fee on the exiting stake.
+        let penalty = user_stake * 3000 / 10_000;
+        let fee_bps = compute_fee_basis_points(call.participant_count);
+        let fee = user_stake * fee_bps / 10_000;
+        let refund = user_stake
+            .checked_sub(penalty)
+            .and_then(|r| r.checked_sub(fee))
+            .expect("Arithmetic underflow");
+
+        // Draw the refund from the vault; the burn stays in the contract (fees).
+        if refund > 0 {
+            Self::vault_withdraw(&env, refund);
+        }
+        call.vault_balance = call
+            .vault_balance
+            .checked_sub(refund)
+            .expect("Arithmetic underflow");
+
+        // Add the fee (but not the burn) to accumulated platform fees.
+        if fee > 0 {
+            let current_fees: i128 = env
+                .storage()
+                .persistent()
+                .get(&DataKey::PlatformFees)
+                .unwrap_or(0);
+            env.storage()
+                .persistent()
+                .set(&DataKey::PlatformFees, &(current_fees + fee));
+        }
+
+        // Reduce the targeted outcome pool by the full exiting stake.
+        let current_pool = call.outcome_pools.get(outcome_index).unwrap();
+        call.outcome_pools.set(
+            outcome_index,
+            current_pool
+                .checked_sub(user_stake)
+                .expect("Arithmetic underflow"),
+        );
+
+        env.storage().persistent().set(&key, &call);
+        bump_persistent_ttl(&env, &key);
+
+        // Zero out the stake so a second exit reverts.
+        env.storage().persistent().set(&stake_key, &0i128);
+        bump_persistent_ttl(&env, &stake_key);
+
+        // Refund principal to the user.
+        if refund > 0 {
+            let token_client = token::Client::new(&env, &call.stake_token);
+            token_client.transfer(&env.current_contract_address(), &user, &refund);
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "EarlyExit"), call_id, user),
+            (
+                outcome_index,
+                user_stake,
+                refund,
+                penalty,
+                fee,
+                call.outcome_pools.get(outcome_index).unwrap(), // New pool state
+                call.vault_balance,                             // New vault balance
             ),
         );
     }
@@ -1420,6 +1601,16 @@ impl CallRegistry {
             .get(&DataKey::Call(call_id))
             .expect("Call does not exist");
         compute_fee_basis_points(call.participant_count)
+    }
+
+    /// Number of unique participants staked on a call (issue #320).
+    pub fn get_participant_count(env: Env, call_id: u64) -> u32 {
+        let call: Call = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Call(call_id))
+            .expect("Call does not exist");
+        call.participant_count
     }
 
     // ── Binary market view shims (issue #315) ──────────────────────────────
