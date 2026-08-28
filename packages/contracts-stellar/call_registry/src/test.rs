@@ -858,8 +858,8 @@ fn test_get_user_stake_existing_and_idempotent() {
     assert!(client.has_stake(&call_id, &staker, &1u32));
 
     // Idempotency / No TTL bump
-    // Note: The Soroban SDK does not currently expose a `get_ttl()` method for persistent 
-    // storage in tests, so we cannot explicitly `assert_eq!(ttl_before, ttl_after)`. 
+    // Note: The Soroban SDK does not currently expose a `get_ttl()` method for persistent
+    // storage in tests, so we cannot explicitly `assert_eq!(ttl_before, ttl_after)`.
     // This is verified logically (read-only `.get()` operation without `.set()` or `.extend_ttl()`).
     let key = DataKey::UserStake(call_id, staker.clone(), 1u32);
     // Since get_ttl might not be available, we at least verify state doesn't change
