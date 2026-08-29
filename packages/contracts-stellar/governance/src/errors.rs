@@ -121,4 +121,14 @@ pub enum ContractError {
     InvalidOwner = 45,
     /// The contract this treasury mirrors its owner from is not configured.
     OwnerSourceNotSet = 46,
+
+    // ── Liquidity Errors (SC-082 / SC-083) ──────────────────────────────────
+    /// Caller attempted to remove more shares than they hold.
+    InsufficientShares = 47,
+    /// No shares exist in the pool (cannot remove liquidity).
+    NoLiquidityShares = 48,
+    /// Liquidity token has not been configured on the treasury.
+    LiquidityTokenNotSet = 49,
+    /// Call registry has not been configured on the treasury.
+    CallRegistryNotSet = 50,
 }

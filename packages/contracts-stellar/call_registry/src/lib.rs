@@ -114,6 +114,8 @@ pub enum DataKey {
     Claimed(u64, Address),
     /// Fee configuration (bps + treasury address) — instance storage (SC-017).
     FeeConfig,
+    /// Treasury contract authorized to credit PlatformFees (SC-084).
+    TreasuryContract,
 }
 
 // ── Surge-fee helper ──────────────────────────────────────────────────────────
@@ -316,6 +318,66 @@ impl CallRegistry {
         }
 
         Self::accrue_fee_internal(&env, call_id, fee_amount)
+    }
+
+    /// Credit platform fees from the authorized treasury contract (SC-084).
+    ///
+    /// Called after the treasury SAC-transfers the staker dividend share.
+    /// Authorization: `caller` must match the configured `TreasuryContract`.
+    pub fn credit_platform_fees(env: Env, caller: Address, amount: i128) -> i128 {
+        caller.require_auth();
+
+        let authorized: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::TreasuryContract)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::Unauthorized));
+        if caller != authorized {
+            panic!("{:?}", ContractError::Unauthorized);
+        }
+        if amount <= 0 {
+            panic!("{:?}", ContractError::InvalidAmount);
+        }
+
+        let current_fees: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PlatformFees)
+            .unwrap_or(0);
+        let new_fees = current_fees
+            .checked_add(amount)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow));
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::PlatformFees, &new_fees);
+        bump_persistent_ttl(&env, &DataKey::PlatformFees);
+
+        env.events().publish(
+            (Symbol::new(&env, "PlatformFeesCredited"), caller),
+            (amount, current_fees, new_fees),
+        );
+
+        new_fees
+    }
+
+    /// Register the treasury contract allowed to credit PlatformFees. Admin-only.
+    pub fn set_treasury_contract(env: Env, treasury: Address) {
+        let _admin = Self::require_admin_auth(&env);
+        env.storage()
+            .instance()
+            .set(&DataKey::TreasuryContract, &treasury);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, LEDGERS_PER_YEAR);
+
+        env.events()
+            .publish((Symbol::new(&env, "TreasuryContractSet"),), treasury);
+    }
+
+    /// Read the authorized treasury contract address, if configured.
+    pub fn get_treasury_contract(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::TreasuryContract)
     }
 
     // ── Admin ─────────────────────────────────────────────────────────────────

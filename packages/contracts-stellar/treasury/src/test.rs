@@ -542,3 +542,11 @@ fn test_fee_bps_range_and_proportional_share() {
     assert_eq!(proportional_share(50, 1, 0), 0); // zero denominator
     assert_eq!(proportional_share(-1, 1, 1), 0);
 }
+
+#[test]
+fn test_split_fee_amounts_sc084() {
+    assert_eq!(split_fee_amounts(10_000), Some((7_000, 3_000)));
+    assert_eq!(split_fee_amounts(1), Some((0, 1)));
+    assert_eq!(split_fee_amounts(0), None);
+    assert_eq!(split_fee_amounts(-1), None);
+}
