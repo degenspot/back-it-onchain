@@ -15,7 +15,6 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
     if (saved && (saved === "en" || saved === "es")) {
       setLocale(saved);
     }
-
     const handleLocaleChange = (e: CustomEvent<{ locale: string }>) => {
       setLocale(e.detail.locale);
     };

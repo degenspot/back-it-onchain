@@ -11,6 +11,9 @@ const compat = new FlatCompat({
 });
 
 const eslintConfig = [
+  {
+    ignores: [".next/**", "node_modules/**", "out/**", "build/**", "next-env.d.ts"],
+  },
   ...compat.extends("next/core-web-vitals", "next/typescript"),
   // Apply the jsx-a11y recommended rules. The `next` configs already register
   // the `jsx-a11y` plugin, so we only take its rules (not its `plugins` key)
