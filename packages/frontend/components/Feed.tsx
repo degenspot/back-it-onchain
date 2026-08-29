@@ -3,7 +3,12 @@
 import { useState, useEffect } from 'react';
 import { CallCard } from './CallCard';
 import { CallCardSkeleton } from './CallCardSkeleton';
-import StakingModal from './StakingModal';
+import dynamic from 'next/dynamic';
+import { dynamicSkeleton } from '@/src/lib/perf'
+const StakingModal = dynamic(() => import('./StakingModal'), {
+  ssr: false,
+  loading: () => dynamicSkeleton({ loaderLabel: 'Loading staking...', minHeight: 96 }),
+});
 import RecommendedUsers from './RecommendedUsers';
 import { type Call } from '@/lib/types';
 

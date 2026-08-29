@@ -9,6 +9,7 @@ import { useChain } from "@/components/ChainProvider";
 import { formatJoinedDate } from "@/lib/utils";
 
 import { CallCard } from "@/components/CallCard";
+import { FeedPersonalize } from "@/src/components/FeedPersonalize";
 
 const API_BASE_URL = (
     process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:3001"
@@ -136,6 +137,7 @@ export default function ProfilePage() {
 
     const RightSidebar = (
         <div className="space-y-6">
+            <FeedPersonalize />
             <div className="bg-secondary/20 rounded-xl p-6 border border-border">
                 <h3 className="font-bold text-lg mb-2">Reputation Score</h3>
 

@@ -9,7 +9,12 @@ import { useGlobalState } from "@/components/GlobalState";
 import * as React from "react";
 import { useState, useEffect } from "react";
 import { Loader } from "@/components/ui/Loader";
-import { PriceChart } from "@/components/PriceChart";
+import dynamic from "next/dynamic";
+import { dynamicSkeleton } from "@/src/lib/perf";
+const PriceChart = dynamic(() => import("@/components/PriceChart").then((m) => m.PriceChart), {
+  ssr: false,
+  loading: () => dynamicSkeleton({ loaderLabel: "Loading price chart...", minHeight: 300 }),
+});
 import { ActivityLog } from "@/components/ActivityLog";
 import { MarketDetailSkeleton } from "@/components/MarketDetailSkeleton";
 import { MarketDetailRightSidebarSkeleton } from "@/components/MarketDetailRightSidebarSkeleton";

@@ -5,7 +5,12 @@ import Link from "next/link";
 import { TrendingUp, ShieldCheck, Users } from "lucide-react";
 import { Logo } from "@/components/logo";
 import { ChainSelector } from "@/components/ChainSelector";
-import { WalletConnectButton } from "@/components/WalletConnectButton";
+import dynamic from "next/dynamic";
+import { dynamicSkeleton } from "@/src/lib/perf";
+const WalletConnectButton = dynamic(() => import("@/components/WalletConnectButton").then((m) => m.WalletConnectButton), {
+  ssr: false,
+  loading: () => dynamicSkeleton({ loaderLabel: "Wallet", minHeight: 40 }),
+});
 import MarketTicker from "@/components/MarketTicker";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
 import { TrendingSidebar } from "@/components/TrendingSidebar";
