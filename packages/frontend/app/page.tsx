@@ -29,6 +29,7 @@ export default function LandingPage() {
             <ChainSelector />
             <Link
               href="/feed"
+              prefetch={false}
               className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
             >
               {commonT("explore")}

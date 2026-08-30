@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
  */
 export function FeedPersonalize() {
   const { prefs, setPrefs, resetPrefs } = useFeedPrefs();
+  const [muteInput, setMuteInput] = React.useState('');
 
   const toggleChain = (chain: FeedPrefs['chains'][number]) => {
     const hasAll = prefs.chains.includes('all');
@@ -26,6 +27,15 @@ export function FeedPersonalize() {
 
   const setWeight = (key: keyof FeedPrefs['weights'], value: number) => {
     setPrefs({ weights: { ...prefs.weights, [key]: value } });
+  };
+
+  const addMute = () => {
+    const value = muteInput.trim();
+    if (!value) return;
+    if (!prefs.mutedAuthors.some((m) => m.toLowerCase() === value.toLowerCase())) {
+      setPrefs({ mutedAuthors: [...prefs.mutedAuthors, value] });
+    }
+    setMuteInput('');
   };
 
   const removeMuted = (author: string) => {
@@ -119,6 +129,38 @@ export function FeedPersonalize() {
           </ul>
         </fieldset>
       ) : null}
+
+      <fieldset>
+        <legend className="mb-2 text-xs font-medium text-muted-foreground">
+          Mute a user or token
+        </legend>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={muteInput}
+            onChange={(e) => setMuteInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                addMute();
+              }
+            }}
+            placeholder="0x... or handle"
+            aria-label="User or token to mute"
+            data-testid="personalize-mute-input"
+            className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+          />
+          <button
+            type="button"
+            onClick={addMute}
+            disabled={!muteInput.trim()}
+            data-testid="personalize-mute-add"
+            className="rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-secondary/60 disabled:opacity-50"
+          >
+            Mute
+          </button>
+        </div>
+      </fieldset>
     </div>
   );
 }
