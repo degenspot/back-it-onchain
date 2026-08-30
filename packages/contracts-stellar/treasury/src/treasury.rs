@@ -13,7 +13,7 @@
 use governance::errors::ContractError;
 use governance::ownership;
 use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, token, Address, Env, Symbol, Vec,
+    contract, contractimpl, contracttype, panic_with_error, token, Address, Env, Map, Symbol, Vec,
 };
 
 // ── TTL constants (issue #169) ───────────────────────────────────────────────
@@ -71,6 +71,8 @@ pub enum DataKey {
     LiquidityToken,
     /// Call registry credited with the staker dividend share (SC-084).
     CallRegistry,
+    /// Synced vault balances: call_id -> vault_balance (SC-085).
+    SyncedVaultBalances,
 }
 
 pub(crate) fn bump_persistent_ttl(env: &Env, key: &Symbol) {
@@ -298,6 +300,41 @@ impl Treasury {
     /// Read the configured call registry address.
     pub fn get_call_registry(env: Env) -> Address {
         get_call_registry_address(&env)
+    }
+
+    /// Sync vault balance from call registry and cache it for analytics.
+    ///
+    /// Pulls `vault_balance` from the call registry for the given `call_id`
+    /// and stores it in the treasury's persistent map. Reverts if the call
+    /// does not exist in the registry.
+    pub fn sync_vault_balance(env: Env, call_id: u64) {
+        let registry = get_call_registry_address(&env);
+        let call_client = call_registry::CallRegistryClient::new(&env, &registry);
+        let call = call_client.get_call(&call_id);
+        let vault_balance = call.vault_balance;
+
+        let mut vault_balances: Map<u64, i128> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SyncedVaultBalances)
+            .unwrap_or_else(|| Map::new(&env));
+        vault_balances.set(call_id, vault_balance);
+        env.storage()
+            .persistent()
+            .set(&DataKey::SyncedVaultBalances, &vault_balances);
+    }
+
+    /// Read the synced vault balance for a given call_id.
+    ///
+    /// Returns the cached `vault_balance` from the most recent `sync_vault_balance`
+    /// call, or `0` if no sync has been performed for this call.
+    pub fn get_synced_vault(env: Env, call_id: u64) -> i128 {
+        let vault_balances: Map<u64, i128> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SyncedVaultBalances)
+            .unwrap_or_else(|| Map::new(&env));
+        vault_balances.get(call_id).unwrap_or(0i128)
     }
 
     // ── Liquidity (SC-082 / SC-083 / SC-086) ─────────────────────────────────

@@ -10,6 +10,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 soroban-sdk = "21.4"
 governance = { path = "../governance" }
+call_registry = { path = "../call_registry" }
 
 [dev-dependencies]
 soroban-sdk = { version = "21.4", features = ["testutils"] }
