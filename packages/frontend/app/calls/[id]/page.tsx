@@ -368,11 +368,12 @@ export default function CallDetailPage() {
 
                             {/* ── NEW: amount input (replaces the hardcoded "100 USDC" text) ── */}
                             <div className="mb-4 space-y-1">
-                                <label className="block text-sm font-medium text-muted-foreground">
+                                <label htmlFor="stake-amount" className="block text-sm font-medium text-muted-foreground">
                                     Amount (USDC)
                                 </label>
                                 <div className="flex items-center gap-2">
                                     <input
+                                        id="stake-amount"
                                         type="number"
                                         min="0"
                                         step="0.000001"

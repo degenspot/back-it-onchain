@@ -98,9 +98,8 @@ export function NotificationItem({
   const link = getResourceLink();
 
   return (
-    <Link href={link} className="block w-full">
+    <Link href={link} className="block w-full" aria-label="Notification" onClick={handleClick}>
       <div
-        onClick={handleClick}
         className={cn(
           "px-5 py-4 cursor-pointer transition-all hover:bg-secondary/50 flex items-start gap-4",
           !notification.isRead ? 'bg-primary/5' : ''

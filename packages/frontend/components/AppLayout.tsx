@@ -14,7 +14,7 @@ export function AppLayout({
             <div className="max-w-7xl mx-auto flex justify-center min-h-screen">
                 <Nav />
 
-                <main className="flex-1 max-w-2xl w-full border-x border-border min-h-screen">
+                <main id="main-content" className="flex-1 max-w-2xl w-full border-x border-border min-h-screen">
                     {children}
                 </main>
 

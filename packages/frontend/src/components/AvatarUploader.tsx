@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import Image from 'next/image';
 import { cn } from '@/lib/utils';
 import { useAvatarCrop } from '@/src/hooks/useAvatarCrop';
 
@@ -34,19 +35,23 @@ export function AvatarUploader({ onUpload, size = 96, className }: AvatarUploade
   return (
     <div className={cn('flex flex-col items-center gap-4', className)}>
       <div
-        className={cn('flex items-center justify-center rounded-full border-4 border-border', error && 'border-destructive/40')}
+        className={cn('relative flex items-center justify-center rounded-full border-4 border-border', error && 'border-destructive/40')}
         style={{ width: size, height: size }}
         data-testid="avatar-canvas"
       >
-        <img
-          src={preview ?? sourceUrl ?? ''}
-          alt="avatar preview"
-          className="h-full w-full rounded-full object-cover"
-          data-testid="avatar-preview"
-        />
-        {!preview && !sourceUrl ? (
+        {preview ?? sourceUrl ? (
+          <Image
+            src={preview ?? sourceUrl ?? ''}
+            alt="avatar preview"
+            fill
+            unoptimized
+            sizes={`${size}px`}
+            className="rounded-full object-cover"
+            data-testid="avatar-preview"
+          />
+        ) : (
           <span className="text-3xl text-muted-foreground">+</span>
-        ) : null}
+        )}
       </div>
 
       <div className="flex flex-wrap items-center justify-center gap-2">

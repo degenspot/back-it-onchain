@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import "./globals.css";
 import { Providers } from "@/components/Providers";
 import { I18nProvider } from "@/components/I18nProvider";
+import { SkipLink } from "@/components/SkipLink";
 import '@coinbase/onchainkit/styles.css';
 
 export const metadata: Metadata = {
@@ -17,6 +18,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="antialiased">
+        <SkipLink />
         <I18nProvider>
           <Providers>{children}</Providers>
         </I18nProvider>

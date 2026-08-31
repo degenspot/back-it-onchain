@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { TrendingUp, Clock, ShieldCheck, MessageSquare, MoreHorizontal, Flag } from "lucide-react";
 
 import { type Call } from "@/lib/types";
@@ -89,6 +89,69 @@ export function CallCard({ call }: CallCardProps) {
   const [reportReason, setReportReason] = useState("");
   const [isReporting, setIsReporting] = useState(false);
 
+  // Report modal focus management
+  const reportModalRef = useRef<HTMLDivElement>(null);
+  const reportCloseButtonRef = useRef<HTMLButtonElement>(null);
+  const reportTriggerRef = useRef<HTMLElement | null>(null);
+
+  // Close the options dropdown with the Escape key.
+  useEffect(() => {
+    if (!showOptions) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') setShowOptions(false);
+    }
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [showOptions]);
+
+  // Focus management + focus trap + Escape close for the report modal.
+  useEffect(() => {
+    if (!showReportModal) return;
+
+    // Remember the trigger so we can restore focus when the modal closes.
+    if (!reportTriggerRef.current) {
+      reportTriggerRef.current = document.activeElement as HTMLElement | null;
+    }
+    // Focus the close button when the modal opens.
+    setTimeout(() => reportCloseButtonRef.current?.focus(), 0);
+
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setShowReportModal(false);
+        return;
+      }
+      if (e.key !== 'Tab') return;
+
+      const dialog = reportModalRef.current;
+      if (!dialog) return;
+      const focusable = dialog.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [showReportModal]);
+
+  // Restore focus to the report trigger when the modal closes.
+  useEffect(() => {
+    if (showReportModal) return;
+    if (reportTriggerRef.current) {
+      reportTriggerRef.current.focus?.();
+      reportTriggerRef.current = null;
+    }
+  }, [showReportModal]);
+
   // If reported optimistically, hide the component from the feed
   if (isReported) {
     return null;
@@ -157,20 +220,23 @@ export function CallCard({ call }: CallCardProps) {
                   }}
                   className="p-1 hover:bg-secondary rounded-md text-muted-foreground hover:text-foreground transition-colors"
                   aria-label="More options"
+                  aria-haspopup="menu"
+                  aria-expanded={showOptions}
                 >
                   <MoreHorizontal className="w-5 h-5" />
                 </button>
 
                 {showOptions && (
                   <div
+                    role="menu"
+                    aria-label="Card options"
                     className="absolute right-0 top-full mt-1 w-40 bg-card border border-border rounded-lg shadow-lg z-50 py-1"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                    }}
                   >
                     <button
-                      onClick={() => {
+                      role="menuitem"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
                         setShowOptions(false);
                         setShowReportModal(true);
                       }}
@@ -226,6 +292,7 @@ export function CallCard({ call }: CallCardProps) {
                 rel="noopener noreferrer"
                 onClick={(e) => e.stopPropagation()}
                 className="text-xs text-muted-foreground hover:text-primary transition-colors"
+                aria-label={`View ${call.conditionJson?.title || call.title || 'call'} on explorer (opens in new tab)`}
               >
                 View on Explorer ↗
               </a>
@@ -245,6 +312,7 @@ export function CallCard({ call }: CallCardProps) {
                   window.dispatchEvent(ev);
                 }}
                 className="px-3 py-1 rounded-md bg-primary text-white text-sm shadow-sm hover:brightness-95"
+                aria-label={`Quick stake on ${call.conditionJson?.title || call.title || 'this call'}`}
               >
                 Quick Stake
               </button>
@@ -256,19 +324,24 @@ export function CallCard({ call }: CallCardProps) {
       {/* Report Modal */}
       {showReportModal && (
         <div
+          ref={reportModalRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="report-modal-title"
+          aria-describedby="report-modal-desc"
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
-          onClick={(e) => e.stopPropagation()}
         >
           <div
             className="bg-card border border-border rounded-xl p-6 w-full max-w-sm shadow-xl"
-            onClick={(e) => e.stopPropagation()}
           >
-            <h2 className="text-xl font-bold mb-4">Report Content</h2>
-            <p className="text-sm text-muted-foreground mb-4">
+            <h2 id="report-modal-title" className="text-xl font-bold mb-4">Report Content</h2>
+            <p id="report-modal-desc" className="text-sm text-muted-foreground mb-4">
               Please tell us why you are reporting this call.
             </p>
             <form onSubmit={handleReportSubmit}>
+              <label htmlFor="report-reason" className="sr-only">Reason for reporting</label>
               <textarea
+                id="report-reason"
                 className="w-full bg-secondary border border-border rounded-lg p-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 mb-4 min-h-[100px]"
                 placeholder="Reason for reporting..."
                 value={reportReason}
@@ -277,10 +350,12 @@ export function CallCard({ call }: CallCardProps) {
               />
               <div className="flex items-center justify-end gap-3">
                 <button
+                  ref={reportCloseButtonRef}
                   type="button"
                   onClick={() => setShowReportModal(false)}
                   className="px-4 py-2 text-sm font-medium hover:text-muted-foreground transition-colors"
                   disabled={isReporting}
+                  aria-label="Cancel report"
                 >
                   Cancel
                 </button>
@@ -288,6 +363,7 @@ export function CallCard({ call }: CallCardProps) {
                   type="submit"
                   className="px-4 py-2 text-sm font-medium bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50 flex items-center gap-2"
                   disabled={isReporting || !reportReason.trim()}
+                  aria-label="Submit report"
                 >
                   {isReporting ? 'Reporting...' : 'Submit Report'}
                 </button>
