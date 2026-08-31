@@ -11,7 +11,7 @@ interface SearchFilters {
   sort: SearchSort;
 }
 
-interface SearchResult {
+export interface SearchResult {
   id: string;
   title: string;
   type: "call" | "user";
@@ -46,7 +46,7 @@ export function useSearch() {
     chain: "all",
     sort: "relevance",
   });
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const [debouncedQuery, setDebouncedQuery] = useState("");
 
