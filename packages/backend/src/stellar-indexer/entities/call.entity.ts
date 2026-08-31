@@ -75,6 +75,20 @@ export class Call {
   })
   eventSequence: number;
 
+  @Column({
+    nullable: true,
+    comment:
+      'Block/ledger hash at the time this event was indexed — used as the reorg-detection cursor',
+  })
+  blockHash: string;
+
+  @Column({
+    default: false,
+    comment:
+      'True when a later re-index detected this row was on an orphaned (reorged) branch',
+  })
+  isOrphaned: boolean;
+
   @CreateDateColumn()
   createdAt: Date;
 

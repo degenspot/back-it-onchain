@@ -7,13 +7,18 @@ import {
 } from 'typeorm';
 
 /**
- * AuditLog – append-only record of every oracle sign, relayer submit, and
- * admin action. No UPDATE or DELETE operations are permitted on this table;
- * enforcement is handled at the service layer (AuditLogService).
+ * Well-known `action` values written by OracleService. Kept as a plain
+ * string union (rather than a Postgres enum) so new actions never require
+ * a migration — callers are free to log other actions too.
  */
+export enum AuditLogAction {
+  ORACLE_SETTLEMENT = 'oracle.settlement',
+  ORACLE_UNRESOLVED = 'oracle.unresolved',
+  ORACLE_KEY_ROTATED = 'oracle.key_rotated',
+}
+
 @Entity('audit_logs')
-@Index('IDX_audit_callId', ['callId'])
-@Index('IDX_audit_actor', ['actor'])
+@Index('IDX_audit_log_action_created_at', ['action', 'createdAt'])
 export class AuditLog {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -45,6 +50,11 @@ export class AuditLog {
 
   @Column({ type: 'jsonb', nullable: true })
   payload: Record<string, unknown>;
+
+
+  /** Chain the action relates to ('base' | 'stellar'), when applicable. */
+  @Column({ nullable: true })
+  chain: string;
 
   @CreateDateColumn()
   createdAt: Date;

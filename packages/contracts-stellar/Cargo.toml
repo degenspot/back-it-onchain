@@ -4,5 +4,6 @@ resolver = "2"
 members = [
     "call_registry",
     "outcome_manager",
-      "governance"
+    "governance",
+    "treasury",
 ]

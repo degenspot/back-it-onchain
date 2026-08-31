@@ -142,6 +142,10 @@ export function SearchPalette() {
           className="fixed left-1/2 top-[20%] -translate-x-1/2 w-full max-w-lg z-50 rounded-2xl border border-zinc-700 bg-zinc-900 shadow-2xl outline-none"
           aria-label="Global search"
         >
+          <Dialog.Title className="sr-only">Global search</Dialog.Title>
+          <Dialog.Description className="sr-only">
+            Search across users, calls, and tokens.
+          </Dialog.Description>
           {/* Search input */}
           <div className="flex items-center gap-3 px-4 py-3 border-b border-zinc-700">
             <Search className="h-5 w-5 text-zinc-400 shrink-0" />
@@ -153,9 +157,11 @@ export function SearchPalette() {
               className="flex-1 bg-transparent text-white placeholder-zinc-500 outline-none text-sm"
             />
             {query && (
-              <button onClick={() => setQuery("")} className="text-zinc-500 hover:text-white">
-                <X className="h-4 w-4" />
-              </button>
+              <Dialog.Close asChild>
+                <button onClick={() => setQuery("")} className="text-zinc-500 hover:text-white" aria-label="Clear search">
+                  <X className="h-4 w-4" />
+                </button>
+              </Dialog.Close>
             )}
             <kbd className="hidden sm:inline-flex items-center gap-1 rounded border border-zinc-600 px-1.5 py-0.5 text-[10px] text-zinc-400">
               ESC

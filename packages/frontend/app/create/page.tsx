@@ -212,11 +212,12 @@ export default function CreatePage() {
                 <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
                     {/* Title */}
                     <div className="space-y-2">
-                        <label className="text-sm font-medium flex items-center gap-2">
+                        <label htmlFor="create-title" className="text-sm font-medium flex items-center gap-2">
                             <Type className="h-4 w-4 text-primary" />
                             Prediction Title
                         </label>
                         <input
+                            id="create-title"
                             type="text"
                             placeholder="e.g., ETH will flip BTC by 2025"
                             className="w-full bg-secondary/50 border border-border rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
@@ -227,8 +228,9 @@ export default function CreatePage() {
 
                     {/* Thesis */}
                     <div className="space-y-2">
-                        <label className="text-sm font-medium">Thesis (Optional)</label>
+                        <label htmlFor="create-thesis" className="text-sm font-medium">Thesis (Optional)</label>
                         <textarea
+                            id="create-thesis"
                             placeholder="Why do you think this will happen?"
                             className="w-full bg-secondary/50 border border-border rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/50 min-h-[100px] resize-none transition-all"
                             {...register("thesis")}
@@ -239,11 +241,12 @@ export default function CreatePage() {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         {/* Asset */}
                         <div className="space-y-2">
-                            <label className="text-sm font-medium flex items-center gap-2">
+                            <label htmlFor="create-asset" className="text-sm font-medium flex items-center gap-2">
                                 <DollarSign className="h-4 w-4 text-primary" />
                                 Asset
                             </label>
                             <input
+                                id="create-asset"
                                 type="text"
                                 placeholder="e.g., ETH"
                                 className="w-full bg-secondary/50 border border-border rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
@@ -254,11 +257,12 @@ export default function CreatePage() {
 
                         {/* Condition Type */}
                         <div className="space-y-2">
-                            <label className="text-sm font-medium flex items-center gap-2">
+                            <label htmlFor="create-condition" className="text-sm font-medium flex items-center gap-2">
                                 <Target className="h-4 w-4 text-primary" />
                                 Condition Type
                             </label>
                             <select
+                                id="create-condition"
                                 className="w-full bg-secondary/50 border border-border rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
                                 {...register("conditionType")}
                             >
@@ -271,11 +275,12 @@ export default function CreatePage() {
 
                     {/* Target Price */}
                     <div className="space-y-2">
-                        <label className="text-sm font-medium flex items-center gap-2">
+                        <label htmlFor="create-target" className="text-sm font-medium flex items-center gap-2">
                             <Target className="h-4 w-4 text-primary" />
                             Target Price
                         </label>
                         <input
+                            id="create-target"
                             type="text"
                             placeholder="e.g., $5,000"
                             className="w-full bg-secondary/50 border border-border rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
@@ -287,11 +292,12 @@ export default function CreatePage() {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         {/* Deadline */}
                         <div className="space-y-2">
-                            <label className="text-sm font-medium flex items-center gap-2">
+                            <label htmlFor="create-deadline" className="text-sm font-medium flex items-center gap-2">
                                 <Calendar className="h-4 w-4 text-primary" />
                                 Deadline
                             </label>
                             <input
+                                id="create-deadline"
                                 type="date"
                                 className="w-full bg-secondary/50 border border-border rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
                                 {...register("deadline")}
@@ -301,11 +307,12 @@ export default function CreatePage() {
 
                         {/* Stake Amount */}
                         <div className="space-y-2">
-                            <label className="text-sm font-medium flex items-center gap-2">
+                            <label htmlFor="create-stake" className="text-sm font-medium flex items-center gap-2">
                                 <DollarSign className="h-4 w-4 text-primary" />
                                 Your Stake (USDC)
                             </label>
                             <input
+                                id="create-stake"
                                 type="number"
                                 placeholder="100"
                                 step="0.000001"

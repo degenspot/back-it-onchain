@@ -71,11 +71,13 @@ describe('HealthController', () => {
 
     it('reports error when the database (critical) is down', async () => {
       typeOrm.pingCheck.mockReturnValue(down('database', { message: 'no connection' }));
+      const mockRes = { status: jest.fn() };
 
-      const result = await controller.readiness();
+      const result = await controller.readiness(mockRes as any);
 
       expect(result.status).toBe('error');
       expect(result.details.database.status).toBe('down');
+      expect(mockRes.status).toHaveBeenCalledWith(503);
     });
 
     it('reports degraded when non-critical dependencies fail within the threshold', async () => {
@@ -93,10 +95,12 @@ describe('HealthController', () => {
       configService.get.mockReturnValue(1); // threshold = 1
       cache.pingCheck.mockReturnValue(down('cache'));
       rpc.checkBase.mockReturnValue(down('rpc_base'));
+      const mockRes = { status: jest.fn() };
 
-      const result = await controller.readiness();
+      const result = await controller.readiness(mockRes as any);
 
       expect(result.status).toBe('error');
+      expect(mockRes.status).toHaveBeenCalledWith(503);
     });
 
     it('treats an indicator that throws as down rather than crashing the endpoint', async () => {

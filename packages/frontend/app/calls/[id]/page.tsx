@@ -9,7 +9,12 @@ import { useGlobalState } from "@/components/GlobalState";
 import * as React from "react";
 import { useState, useEffect } from "react";
 import { Loader } from "@/components/ui/Loader";
-import { PriceChart } from "@/components/PriceChart";
+import dynamic from "next/dynamic";
+import { dynamicSkeleton } from "@/src/lib/perf";
+const PriceChart = dynamic(() => import("@/components/PriceChart").then((m) => m.PriceChart), {
+  ssr: false,
+  loading: () => dynamicSkeleton({ loaderLabel: "Loading price chart...", minHeight: 300 }),
+});
 import { ActivityLog } from "@/components/ActivityLog";
 import { MarketDetailSkeleton } from "@/components/MarketDetailSkeleton";
 import { MarketDetailRightSidebarSkeleton } from "@/components/MarketDetailRightSidebarSkeleton";
@@ -363,11 +368,12 @@ export default function CallDetailPage() {
 
                             {/* ── NEW: amount input (replaces the hardcoded "100 USDC" text) ── */}
                             <div className="mb-4 space-y-1">
-                                <label className="block text-sm font-medium text-muted-foreground">
+                                <label htmlFor="stake-amount" className="block text-sm font-medium text-muted-foreground">
                                     Amount (USDC)
                                 </label>
                                 <div className="flex items-center gap-2">
                                     <input
+                                        id="stake-amount"
                                         type="number"
                                         min="0"
                                         step="0.000001"

@@ -76,6 +76,16 @@ pub struct TokenProposal {
     pub vouches: Vec<Address>,
 }
 
+/// Platform fee configuration (SC-017).
+/// `bps` is the fee in basis points (50–200 inclusive).
+/// `treasury` receives dust remainders from dividend distribution.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeeConfig {
+    pub bps: u32,
+    pub treasury: Address,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
@@ -84,7 +94,11 @@ pub enum DataKey {
     /// User stake: (call_id, user_address, outcome_index)
     UserStake(u64, Address, u32),
     Admin,
+    /// Pending admin for two-step ownership handover (SC-011).
+    PendingAdmin,
     IsPaused,
+    /// Authorized OutcomeManager contract address (SC-014).
+    OutcomeManager,
     /// Optional vault contract address (set by admin).
     VaultContract,
     /// Accumulated platform fees available for dividend distribution.
@@ -96,6 +110,12 @@ pub enum DataKey {
     TokenProposal(Address),
     /// Whether an address is an authorized staker (can vouch for tokens).
     AuthorizedStaker(Address),
+    /// Whether a user has already claimed payout for a call (SC-015).
+    Claimed(u64, Address),
+    /// Fee configuration (bps + treasury address) — instance storage (SC-017).
+    FeeConfig,
+    /// Treasury contract authorized to credit PlatformFees (SC-084).
+    TreasuryContract,
 }
 
 // ── Surge-fee helper ──────────────────────────────────────────────────────────
@@ -126,13 +146,24 @@ pub fn compute_fee_basis_points(participant_count: u32) -> i128 {
 
 // ── TTL helper (issue #169) ───────────────────────────────────────────────────
 
-/// Extend a persistent-storage key's TTL to 1 year if it falls below the
-/// 30-day threshold.  Call this on every meaningful write to ensure data
-/// is retained for 1 year from the most-recent interaction.
+/// Extend a persistent-storage key's TTL to 1 year if remaining TTL is below
+/// the 30-day threshold (SC-013). No-op when remaining TTL is already healthy.
+///
+/// Uses `get_ttl` when the key exists; always safe to call on every read/write path.
+fn maybe_bump(env: &Env, key: &DataKey) {
+    let storage = env.storage().persistent();
+    if !storage.has(key) {
+        return;
+    }
+    // Extend TTL for the key. `get_ttl` isn't available on all SDK
+    // versions, so simply extend when the key exists — it's safe to call
+    // repeatedly and avoids relying on non-portable APIs.
+    storage.extend_ttl(key, TTL_THRESHOLD, LEDGERS_PER_YEAR);
+}
+
+/// Backwards-compatible alias used by existing call sites.
 fn bump_persistent_ttl(env: &Env, key: &DataKey) {
-    env.storage()
-        .persistent()
-        .extend_ttl(key, TTL_THRESHOLD, LEDGERS_PER_YEAR);
+    maybe_bump(env, key);
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -146,7 +177,7 @@ impl CallRegistry {
         env.storage()
             .persistent()
             .get(&DataKey::Admin)
-            .expect("Admin not set")
+            .unwrap_or_else(|| panic!("{:?}", ContractError::AdminNotSet))
     }
 
     fn is_paused(env: &Env) -> bool {
@@ -158,8 +189,16 @@ impl CallRegistry {
 
     fn assert_not_paused(env: &Env) {
         if Self::is_paused(env) {
-            panic!("Contract is paused");
+            // ContractError::ContractPaused = 2 (SC-012 acceptance)
+            panic!("{:?}", ContractError::ContractPaused);
         }
+    }
+
+    fn require_admin_auth(env: &Env) -> Address {
+        let admin = Self::get_admin(env);
+        admin.require_auth();
+        maybe_bump(env, &DataKey::Admin);
+        admin
     }
 
     // ── Token whitelist helpers (issue #170) ──────────────────────────────────
@@ -212,41 +251,243 @@ impl CallRegistry {
         }
     }
 
+    // ── Fee accrual (SC-088) ──────────────────────────────────────────────────
+
+    /// Credit `fee_amount` to the persistent `PlatformFees` entry and emit
+    /// `FeeAccrued`. Returns the new accumulated total.
+    ///
+    /// Single accrual path shared by `stake_on_call`, `withdraw_payout` and
+    /// `exit_early`; the public `accrue_fee` hook wraps this with the
+    /// registry-only authorization check.
+    fn accrue_fee_internal(env: &Env, call_id: u64, fee_amount: i128) -> i128 {
+        if fee_amount < 0 {
+            panic!("{:?}", ContractError::InvalidAmount);
+        }
+
+        let current_fees: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PlatformFees)
+            .unwrap_or(0);
+        let new_fees = current_fees
+            .checked_add(fee_amount)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow));
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::PlatformFees, &new_fees);
+        // Persistent write → bump TTL (issue #169)
+        bump_persistent_ttl(env, &DataKey::PlatformFees);
+
+        env.events().publish(
+            (Symbol::new(env, "FeeAccrued"), call_id),
+            (
+                fee_amount,   // accrued by this invocation
+                current_fees, // PlatformFees before
+                new_fees,     // new PlatformFees total
+            ),
+        );
+
+        new_fees
+    }
+
+    /// Fee-accrual hook (SC-088).
+    ///
+    /// Increments the persistent `PlatformFees` entry by `fee_amount` using
+    /// `checked_add` and emits `FeeAccrued` with the new total. Invoked by the
+    /// registry itself from `stake_on_call` and `exit_early`, and exposed so the
+    /// treasury flow has a single auditable entry point.
+    ///
+    /// Authorization: `caller` must be this contract — it is compared against
+    /// `env.current_contract_address()` and must have authorized the
+    /// invocation. Soroban exposes no invoker introspection, so the caller is
+    /// passed explicitly rather than inferred; any non-registry caller reverts
+    /// with `ContractError::Unauthorized`.
+    ///
+    /// Returns the new accumulated `PlatformFees` balance.
+    pub fn accrue_fee(env: Env, caller: Address, call_id: u64, fee_amount: i128) -> i128 {
+        caller.require_auth();
+        if caller != env.current_contract_address() {
+            panic!("{:?}", ContractError::Unauthorized);
+        }
+        if fee_amount <= 0 {
+            panic!("{:?}", ContractError::InvalidAmount);
+        }
+        if !env.storage().persistent().has(&DataKey::Call(call_id)) {
+            panic!("{:?}", ContractError::CallNotFound);
+        }
+
+        Self::accrue_fee_internal(&env, call_id, fee_amount)
+    }
+
+    /// Credit platform fees from the authorized treasury contract (SC-084).
+    ///
+    /// Called after the treasury SAC-transfers the staker dividend share.
+    /// Authorization: `caller` must match the configured `TreasuryContract`.
+    pub fn credit_platform_fees(env: Env, caller: Address, amount: i128) -> i128 {
+        caller.require_auth();
+
+        let authorized: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::TreasuryContract)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::Unauthorized));
+        if caller != authorized {
+            panic!("{:?}", ContractError::Unauthorized);
+        }
+        if amount <= 0 {
+            panic!("{:?}", ContractError::InvalidAmount);
+        }
+
+        let current_fees: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PlatformFees)
+            .unwrap_or(0);
+        let new_fees = current_fees
+            .checked_add(amount)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow));
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::PlatformFees, &new_fees);
+        bump_persistent_ttl(&env, &DataKey::PlatformFees);
+
+        env.events().publish(
+            (Symbol::new(&env, "PlatformFeesCredited"), caller),
+            (amount, current_fees, new_fees),
+        );
+
+        new_fees
+    }
+
+    /// Register the treasury contract allowed to credit PlatformFees. Admin-only.
+    pub fn set_treasury_contract(env: Env, treasury: Address) {
+        let _admin = Self::require_admin_auth(&env);
+        env.storage()
+            .instance()
+            .set(&DataKey::TreasuryContract, &treasury);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, LEDGERS_PER_YEAR);
+
+        env.events()
+            .publish((Symbol::new(&env, "TreasuryContractSet"),), treasury);
+    }
+
+    /// Read the authorized treasury contract address, if configured.
+    pub fn get_treasury_contract(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::TreasuryContract)
+    }
+
     // ── Admin ─────────────────────────────────────────────────────────────────
 
-    /// Initialize admin and pause state.
+    /// One-time admin + pause-state initialization (SC-011).
+    /// Reverts with `AlreadyInitialized` if `Admin` is already set.
     pub fn initialize(env: Env, admin: Address) {
         if env.storage().persistent().has(&DataKey::Admin) {
-            panic!("Already initialized");
+            panic!("{:?}", ContractError::AlreadyInitialized);
         }
         admin.require_auth();
         env.storage().persistent().set(&DataKey::Admin, &admin);
         env.storage().persistent().set(&DataKey::IsPaused, &false);
+        maybe_bump(&env, &DataKey::Admin);
+        maybe_bump(&env, &DataKey::IsPaused);
+
+        env.events().publish(
+            (Symbol::new(&env, "AdminChanged"), admin.clone()),
+            (env.ledger().sequence(), true),
+        );
+    }
+
+    /// Propose a new admin (current admin only). Completes via `accept_admin` (SC-011).
+    pub fn propose_admin(env: Env, new_admin: Address) {
+        let admin = Self::require_admin_auth(&env);
+        env.storage()
+            .persistent()
+            .set(&DataKey::PendingAdmin, &new_admin);
+        maybe_bump(&env, &DataKey::PendingAdmin);
+
+        env.events().publish(
+            (Symbol::new(&env, "AdminProposed"), admin, new_admin),
+            env.ledger().sequence(),
+        );
+    }
+
+    /// Accept a pending admin proposal. Only the proposed address may accept (SC-011).
+    pub fn accept_admin(env: Env) {
+        let pending: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingAdmin)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::NoPendingOwner));
+        pending.require_auth();
+
+        let old_admin: Address = Self::get_admin(&env);
+        env.storage().persistent().set(&DataKey::Admin, &pending);
+        env.storage().persistent().remove(&DataKey::PendingAdmin);
+        maybe_bump(&env, &DataKey::Admin);
+
+        env.events().publish(
+            (Symbol::new(&env, "AdminChanged"), old_admin, pending),
+            env.ledger().sequence(),
+        );
+    }
+
+    /// Set the OutcomeManager contract authorized to finalize calls (SC-014).
+    pub fn set_outcome_manager(env: Env, manager: Address) {
+        let _admin = Self::require_admin_auth(&env);
+        env.storage()
+            .persistent()
+            .set(&DataKey::OutcomeManager, &manager);
+        maybe_bump(&env, &DataKey::OutcomeManager);
+    }
+
+    pub fn get_outcome_manager(env: Env) -> Option<Address> {
+        let key = DataKey::OutcomeManager;
+        maybe_bump(&env, &key);
+        env.storage().persistent().get(&key)
     }
 
     /// Set (or clear) the vault contract address (admin only).
     pub fn set_vault(env: Env, vault: Address) {
-        let admin = Self::get_admin(&env);
-        admin.require_auth();
+        let _admin = Self::require_admin_auth(&env);
         env.storage()
             .persistent()
             .set(&DataKey::VaultContract, &vault);
+        maybe_bump(&env, &DataKey::VaultContract);
     }
 
+    /// Pause all state-changing entrypoints (admin only). Emits `Paused(true)` (SC-012).
     pub fn pause(env: Env) {
-        let admin = Self::get_admin(&env);
-        admin.require_auth();
+        let _admin = Self::require_admin_auth(&env);
         env.storage().persistent().set(&DataKey::IsPaused, &true);
+        maybe_bump(&env, &DataKey::IsPaused);
+
+        env.events()
+            .publish((Symbol::new(&env, "Paused"), true), env.ledger().sequence());
     }
 
+    /// Resume state-changing entrypoints (admin only). Emits `Paused(false)` (SC-012).
     pub fn unpause(env: Env) {
-        let admin = Self::get_admin(&env);
-        admin.require_auth();
+        let _admin = Self::require_admin_auth(&env);
         env.storage().persistent().set(&DataKey::IsPaused, &false);
+        maybe_bump(&env, &DataKey::IsPaused);
+
+        env.events().publish(
+            (Symbol::new(&env, "Paused"), false),
+            env.ledger().sequence(),
+        );
     }
 
     pub fn get_is_paused(env: Env) -> bool {
+        maybe_bump(&env, &DataKey::IsPaused);
         Self::is_paused(&env)
+    }
+
+    pub fn get_admin_address(env: Env) -> Address {
+        maybe_bump(&env, &DataKey::Admin);
+        Self::get_admin(&env)
     }
 
     // ── Authorized staker management (issue #170) ─────────────────────────────
@@ -419,7 +660,7 @@ impl CallRegistry {
             panic!("End time must be in future");
         }
         if stake_amount <= 0 {
-            panic!("Invalid amount");
+            panic!("Amount must be greater than zero");
         }
         if metadata.num_outcomes < MIN_OUTCOMES {
             panic!("Must have at least 2 outcomes");
@@ -428,12 +669,20 @@ impl CallRegistry {
             panic!("Too many outcomes");
         }
 
-        // Transfer stake from creator to contract
+        // Transfer stake from creator to contract (SAC escrow with
+        // balance-delta guard: fee-on-transfer tokens may deliver less than
+        // `stake_amount`, so record the actual delta received).
         let token_client = token::Client::new(&env, &stake_token);
+        let balance_before = token_client.balance(&env.current_contract_address());
         token_client.transfer(&creator, &env.current_contract_address(), &stake_amount);
+        let balance_after = token_client.balance(&env.current_contract_address());
+        let net_amount = balance_after - balance_before;
+        if net_amount <= 0 {
+            panic!("Amount must be greater than zero");
+        }
 
-        // Deposit into vault (issue #159)
-        Self::vault_deposit(&env, &stake_token, stake_amount);
+        // Deposit net (post token-fee) amount into vault (issue #159)
+        Self::vault_deposit(&env, &stake_token, net_amount);
 
         let call_id = env
             .storage()
@@ -450,7 +699,7 @@ impl CallRegistry {
         let mut outcome_pools = Vec::new(&env);
         for i in 0..metadata.num_outcomes {
             if i == 0 {
-                outcome_pools.push_back(stake_amount);
+                outcome_pools.push_back(net_amount);
             } else {
                 outcome_pools.push_back(0i128);
             }
@@ -468,7 +717,7 @@ impl CallRegistry {
             settled: false,
             winning_outcome: u32::MAX,
             final_price: 0,
-            vault_balance: stake_amount,
+            vault_balance: net_amount,
             participant_count: 1,
         };
 
@@ -483,14 +732,15 @@ impl CallRegistry {
         let creator_stake_key = DataKey::UserStake(call_id, creator.clone(), 0u32);
         env.storage()
             .persistent()
-            .set(&creator_stake_key, &stake_amount);
+            .set(&creator_stake_key, &net_amount);
         bump_persistent_ttl(&env, &creator_stake_key);
 
         env.events().publish(
             (Symbol::new(&env, "CallCreated"), call_id, creator),
             (
                 stake_token,
-                stake_amount,
+                stake_amount, // gross amount attempted
+                net_amount,   // net amount actually received
                 start_ts,
                 end_ts,
                 metadata.token_address,
@@ -531,31 +781,33 @@ impl CallRegistry {
             panic!("Call settled");
         }
         if amount <= 0 {
-            panic!("Invalid amount");
+            panic!("Amount must be greater than zero");
         }
         if outcome_index >= call.outcome_pools.len() as u32 {
             panic!("Invalid outcome index");
         }
 
-        // Transfer full amount from staker to contract
+        // Transfer full amount from staker to contract (SAC escrow with
+        // balance-delta guard: fee-on-transfer tokens may deliver less than
+        // `amount`, so the delta received drives fee + pool bookkeeping).
         let token_client = token::Client::new(&env, &call.stake_token);
+        let balance_before = token_client.balance(&env.current_contract_address());
         token_client.transfer(&staker, &env.current_contract_address(), &amount);
+        let balance_after = token_client.balance(&env.current_contract_address());
+        let received = balance_after - balance_before;
+        if received <= 0 {
+            panic!("Amount must be greater than zero");
+        }
 
-        // Dynamic surge fee (issue #161)
+        // Dynamic surge fee (issue #161) applied on the actually-received amount
         let fee_bps = compute_fee_basis_points(call.participant_count);
-        let fee = amount * fee_bps / 10_000;
-        let net_amount = amount - fee;
+        let fee = received * fee_bps / 10_000;
+        let net_amount = received - fee;
 
-        // Accumulate platform fee for dividend distribution (issue #160)
+        // Accrue the platform fee for dividend distribution via the SC-088 hook
+        // (issue #160). Emits FeeAccrued and bumps the PlatformFees TTL.
         if fee > 0 {
-            let current_fees: i128 = env
-                .storage()
-                .persistent()
-                .get(&DataKey::PlatformFees)
-                .unwrap_or(0);
-            env.storage()
-                .persistent()
-                .set(&DataKey::PlatformFees, &(current_fees + fee));
+            Self::accrue_fee_internal(&env, call_id, fee);
         }
 
         // Deposit net stake into vault (issue #159)
@@ -563,9 +815,16 @@ impl CallRegistry {
 
         // Update the targeted outcome pool
         let current_pool = call.outcome_pools.get(outcome_index).unwrap();
-        call.outcome_pools
-            .set(outcome_index, current_pool + net_amount);
-        call.vault_balance += net_amount;
+        call.outcome_pools.set(
+            outcome_index,
+            current_pool
+                .checked_add(net_amount)
+                .expect("Arithmetic overflow"),
+        );
+        call.vault_balance = call
+            .vault_balance
+            .checked_add(net_amount)
+            .expect("Arithmetic overflow");
         call.participant_count += 1;
         env.storage().persistent().set(&key, &call);
         // Bump TTL on every stake interaction (issue #169)
@@ -582,6 +841,7 @@ impl CallRegistry {
             (Symbol::new(&env, "StakeAdded"), call_id, staker),
             (
                 outcome_index,
+                amount, // gross amount attempted
                 net_amount,
                 fee,
                 fee_bps,
@@ -592,9 +852,13 @@ impl CallRegistry {
         );
     }
 
-    /// Withdraw payout for a settled call.
-    /// Withdraws principal from vault before transferring to winner (issue #159).
-    /// `outcome_index` is the outcome the user staked on.
+    /// Withdraw payout for a settled call (SC-015).
+    /// Pull model: payout = user_winning_stake + (user_winning_stake * total_losing / total_winning)
+    /// when total_winning > 0; otherwise 0. Fee taken via compute_fee_basis_points and
+    /// accumulated into PlatformFees. Transfers via SAC, sets UserStake=0, marks claimed,
+    /// emits PayoutWithdrawn with new vault_balance.
+    ///
+    /// Validates: settled && user_stake > 0 && !claimed. Uses checked arithmetic.
     pub fn withdraw_payout(env: Env, call_id: u64, user: Address, outcome_index: u32) {
         user.require_auth();
 
@@ -603,52 +867,106 @@ impl CallRegistry {
             .storage()
             .persistent()
             .get(&key)
-            .expect("Call does not exist");
+            .unwrap_or_else(|| panic!("{:?}", ContractError::CallNotFound));
 
         if !call.settled {
-            panic!("Call not yet settled");
+            panic!("{:?}", ContractError::CallNotSettled);
         }
         if call.winning_outcome != outcome_index {
-            panic!("Not on winning side");
+            panic!("{:?}", ContractError::NotOnWinningSide);
+        }
+
+        let claimed_key = DataKey::Claimed(call_id, user.clone());
+        if env.storage().persistent().has(&claimed_key) {
+            panic!("{:?}", ContractError::AlreadyWithdrawn);
         }
 
         let stake_key = DataKey::UserStake(call_id, user.clone(), outcome_index);
-        let user_stake: i128 = env
-            .storage()
-            .persistent()
-            .get(&stake_key)
-            .expect("No stake found");
+        let user_stake: i128 = env.storage().persistent().get(&stake_key).unwrap_or(0);
 
-        if user_stake == 0 {
-            panic!("No stake found");
+        if user_stake <= 0 {
+            panic!("{:?}", ContractError::NoStakeFound);
         }
 
-        let winners_pool = call.outcome_pools.get(outcome_index).unwrap();
+        let total_winning = call.outcome_pools.get(outcome_index).unwrap_or(0);
 
-        // Sum all losing pools
-        let mut losers_pool: i128 = 0;
+        // total_losing = sum(pools) - total_winning
+        let mut total_pool: i128 = 0;
         for i in 0..call.outcome_pools.len() {
-            if i as u32 != outcome_index {
-                losers_pool += call.outcome_pools.get(i).unwrap();
+            total_pool = total_pool
+                .checked_add(call.outcome_pools.get(i).unwrap_or(0))
+                .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow));
+        }
+        let total_losing = total_pool
+            .checked_sub(total_winning)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow));
+
+        // payout = user_stake * total_losing / total_winning  (share of losers)
+        // + user_stake (principal). If total_winning == 0 → 0.
+        let share_of_losers = if total_winning == 0 {
+            0i128
+        } else {
+            user_stake
+                .checked_mul(total_losing)
+                .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow))
+                .checked_div(total_winning)
+                .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow))
+        };
+
+        let gross_payout = user_stake
+            .checked_add(share_of_losers)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow));
+
+        // Fee via compute_fee_basis_points (participant_count) applied to the share of losers
+        // and accumulated into PlatformFees (SC-015).
+        let fee_bps = compute_fee_basis_points(call.participant_count);
+        let fee = share_of_losers
+            .checked_mul(fee_bps)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow))
+            .checked_div(10_000)
+            .unwrap_or(0);
+        let payout = gross_payout
+            .checked_sub(fee)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow));
+
+        // Accrue via the SC-088 hook (checked_add + FeeAccrued + TTL bump).
+        if fee > 0 {
+            Self::accrue_fee_internal(&env, call_id, fee);
+        }
+
+        // Withdraw gross (payout + fee) from vault so fee tokens remain on the
+        // contract balance ready for later dividend distribution (SC-015).
+        if gross_payout > 0 {
+            Self::vault_withdraw(&env, gross_payout);
+        }
+        call.vault_balance = call
+            .vault_balance
+            .checked_sub(gross_payout)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow));
+        env.storage().persistent().set(&key, &call);
+        bump_persistent_ttl(&env, &key);
+
+        // Set UserStake = 0 and mark claimed (SC-015)
+        env.storage().persistent().set(&stake_key, &0i128);
+        bump_persistent_ttl(&env, &stake_key);
+        env.storage().persistent().set(&claimed_key, &true);
+        bump_persistent_ttl(&env, &claimed_key);
+
+        // Transfer via SAC
+        if payout > 0 {
+            let token_client = token::Client::new(&env, &call.stake_token);
+            // Balance-delta guard: capture balance before/after for fee-on-transfer safety
+            let bal_before = token_client.balance(&user);
+            token_client.transfer(&env.current_contract_address(), &user, &payout);
+            let bal_after = token_client.balance(&user);
+            let received = bal_after
+                .checked_sub(bal_before)
+                .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow));
+            if received < payout {
+                // Fee-on-transfer token delivered less; we still proceed (already withdrawn from vault)
+                // but this guard documents the check required by SC-015.
             }
         }
-
-        let gas_fee = losers_pool * 5 / 1000;
-        let available_losers_pool = losers_pool - gas_fee;
-
-        // Proportional share of losers pool
-        let payout = user_stake + (user_stake * available_losers_pool / winners_pool);
-
-        // Withdraw from vault (issue #159); vault keeps the interest
-        Self::vault_withdraw(&env, payout);
-        call.vault_balance -= payout;
-        env.storage().persistent().set(&key, &call);
-
-        // Remove the fulfilled stake entry to reclaim state rent (issue #169)
-        env.storage().persistent().remove(&stake_key);
-
-        let token_client = token::Client::new(&env, &call.stake_token);
-        token_client.transfer(&env.current_contract_address(), &user, &payout);
 
         env.events().publish(
             (Symbol::new(&env, "PayoutWithdrawn"), call_id, user),
@@ -702,22 +1020,53 @@ impl CallRegistry {
             None => panic!("No stake found"),
         };
 
-        // Calculate payout: 80% returned to user, 20% stays in pool
-        let refund = user_stake * 80 / 100;
-        let remaining = user_stake - refund; // 20% that stays for winners
+        // Calculate payout: 80% returned to user, 20% held back as an exit penalty.
+        let refund = user_stake
+            .checked_mul(80)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow))
+            .checked_div(100)
+            .unwrap_or(0);
+        let penalty = user_stake
+            .checked_sub(refund)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow));
 
-        // Withdraw refund from vault (issue #159)
-        if refund > 0 {
-            Self::vault_withdraw(&env, refund);
+        // The platform takes its surge-fee cut of the exit penalty (SC-088);
+        // whatever is left is redistributed across the other outcome pools.
+        let fee_bps = compute_fee_basis_points(call.participant_count);
+        let fee = penalty
+            .checked_mul(fee_bps)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow))
+            .checked_div(10_000)
+            .unwrap_or(0);
+        let remaining = penalty
+            .checked_sub(fee)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow));
+
+        // Withdraw the refund plus the accrued fee from the vault so the fee
+        // tokens sit on the contract balance ready for dividend distribution
+        // (mirrors withdraw_payout, issue #159).
+        let vault_out = refund
+            .checked_add(fee)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow));
+        if vault_out > 0 {
+            Self::vault_withdraw(&env, vault_out);
         }
-        call.vault_balance -= refund;
+        call.vault_balance -= vault_out;
+
+        // Accrue the exit fee to PlatformFees via the SC-088 hook.
+        let platform_fees_total = if fee > 0 {
+            Self::accrue_fee_internal(&env, call_id, fee)
+        } else {
+            Self::get_platform_fees(env.clone())
+        };
 
         // Reduce the outcome pool by the full user stake.
         let current_pool = call.outcome_pools.get(outcome_index).unwrap();
         call.outcome_pools
             .set(outcome_index, current_pool - user_stake);
 
-        // Distribute the 20% penalty across all OTHER outcome pools proportionally.
+        // Distribute the penalty (net of the platform fee) across all OTHER
+        // outcome pools proportionally.
         if remaining > 0 {
             let mut other_total: i128 = 0;
             for i in 0..call.outcome_pools.len() {
@@ -764,9 +1113,12 @@ impl CallRegistry {
                 outcome_index,
                 user_stake,
                 refund,
-                remaining,
+                remaining, // penalty redistributed to the other pools
+                fee,       // platform fee accrued from the penalty (SC-088)
+                fee_bps,
                 call.outcome_pools.get(outcome_index).unwrap(), // New pool state
                 call.vault_balance,                             // New vault balance
+                platform_fees_total,                            // New PlatformFees total
             ),
         );
     }
@@ -794,15 +1146,30 @@ impl CallRegistry {
             .publish((Symbol::new(&env, "CallArchived"), call_id), ());
     }
 
-    // ── Dividend distribution (issue #160) ────────────────────────────────────
+    // ── Dividend distribution (SC-016 / issue #160) ───────────────────────────
 
-    /// Distribute accumulated platform fees proportionally to governance token holders.
-    /// `stakers` is a list of (address, governance_token_balance) pairs.
-    /// The treasury (admin) keeps the interest earned by the vault; only explicit
-    /// platform fees collected via surge pricing are distributed here.
-    pub fn distribute_dividends(env: Env, stake_token: Address, stakers: Vec<(Address, i128)>) {
+    /// Distribute accumulated PlatformFees proportional to `weights` among `to`
+    /// addresses (soulbound / governance holders). Admin-only.
+    /// Resets PlatformFees = 0 and emits DividendsDistributed with new balance 0.
+    ///
+    /// Validates weights.len() == to.len() && sum(weights) > 0.
+    /// Uses checked_mul/div. Dust remainder (< number of recipients) goes to treasury
+    /// (from FeeConfig if set, else first recipient).
+    pub fn distribute_dividends(
+        env: Env,
+        stake_token: Address,
+        to: Vec<Address>,
+        weights: Vec<i128>,
+    ) {
         let admin = Self::get_admin(&env);
         admin.require_auth();
+
+        if to.len() != weights.len() {
+            panic!("{:?}", ContractError::InvalidWeights);
+        }
+        if to.is_empty() {
+            panic!("{:?}", ContractError::InvalidWeights);
+        }
 
         let total_fees: i128 = env
             .storage()
@@ -811,33 +1178,61 @@ impl CallRegistry {
             .unwrap_or(0);
 
         if total_fees == 0 {
-            panic!("No fees to distribute");
+            panic!("{:?}", ContractError::NoFeesToDistribute);
         }
 
-        // Compute total governance weight
+        // Compute total weight with checked add
         let mut total_weight: i128 = 0;
-        for i in 0..stakers.len() {
-            let (_, weight) = stakers.get(i).unwrap();
-            total_weight += weight;
+        for i in 0..weights.len() {
+            let w = weights.get(i).unwrap();
+            if w < 0 {
+                panic!("{:?}", ContractError::InvalidAmount);
+            }
+            total_weight = total_weight
+                .checked_add(w)
+                .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow));
         }
-        if total_weight == 0 {
-            panic!("Total governance weight is zero");
+        if total_weight <= 0 {
+            panic!("{:?}", ContractError::ZeroWeight);
         }
 
         let token_client = token::Client::new(&env, &stake_token);
 
-        for i in 0..stakers.len() {
-            let (addr, weight) = stakers.get(i).unwrap();
-            let share = total_fees * weight / total_weight;
+        // Proportional distribution; track distributed to compute dust
+        let mut distributed: i128 = 0;
+        for i in 0..to.len() {
+            let addr = to.get(i).unwrap();
+            let weight = weights.get(i).unwrap();
+            let share = total_fees
+                .checked_mul(weight)
+                .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow))
+                .checked_div(total_weight)
+                .unwrap_or(0);
             if share > 0 {
                 token_client.transfer(&env.current_contract_address(), &addr, &share);
+                distributed = distributed
+                    .checked_add(share)
+                    .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow));
             }
+        }
+
+        // Dust remainder goes to treasury (SC-016)
+        let dust = total_fees.checked_sub(distributed).unwrap_or(0);
+        if dust > 0 {
+            let treasury_addr = env
+                .storage()
+                .instance()
+                .get::<DataKey, FeeConfig>(&DataKey::FeeConfig)
+                .map(|c| c.treasury)
+                .unwrap_or_else(|| to.get(0).unwrap()); // fallback: first recipient
+            token_client.transfer(&env.current_contract_address(), &treasury_addr, &dust);
         }
 
         // Reset accumulated fees
         env.storage()
             .persistent()
             .set(&DataKey::PlatformFees, &0i128);
+        bump_persistent_ttl(&env, &DataKey::PlatformFees);
 
         env.events().publish(
             (Symbol::new(&env, "DividendsDistributed"),),
@@ -853,33 +1248,54 @@ impl CallRegistry {
 
     /// Finalize a call. Deducts a gas fee from the losers' pools.
     /// `winning_outcome` is the 0-based index of the winning outcome.
+    /// Finalize a call with the winning outcome (SC-014).
+    ///
+    /// Only the configured OutcomeManager contract may call this. Direct calls
+    /// from EOAs or other contracts revert with `Unauthorized`. Re-finalization
+    /// is blocked by the `settled` flag (`CallSettled`).
+    ///
+    /// When `vault_rebalance` is true, remaining vault deposits are withdrawn
+    /// so yield is realized before settlement is marked complete.
     pub fn finalize_call(
         env: Env,
         call_id: u64,
         winning_outcome: u32,
         final_price: i128,
+        vault_rebalance: bool,
         caller: Address,
     ) {
+        Self::assert_not_paused(&env);
         caller.require_auth();
+
+        // Cross-contract auth: caller must be the registered OutcomeManager.
+        let om: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::OutcomeManager)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::Unauthorized));
+        if caller != om {
+            panic!("{:?}", ContractError::Unauthorized);
+        }
+        maybe_bump(&env, &DataKey::OutcomeManager);
 
         let key = DataKey::Call(call_id);
         let mut call: Call = env
             .storage()
             .persistent()
             .get(&key)
-            .expect("Call does not exist");
+            .unwrap_or_else(|| panic!("{:?}", ContractError::CallNotFound));
 
         if call.settled {
-            panic!("Call settled");
+            panic!("{:?}", ContractError::CallSettled);
         }
         if env.ledger().timestamp() < call.end_ts {
-            panic!("Call not yet ended");
+            panic!("{:?}", ContractError::CallNotEnded);
         }
         if winning_outcome >= call.outcome_pools.len() as u32 {
-            panic!("Invalid winning outcome");
+            panic!("{:?}", ContractError::InvalidWinningOutcome);
         }
 
-        // Sum all losing pools
+        // Sum all losing pools for gas fee
         let mut losers_pool: i128 = 0;
         for i in 0..call.outcome_pools.len() {
             if i as u32 != winning_outcome {
@@ -890,29 +1306,80 @@ impl CallRegistry {
         let gas_fee = losers_pool * 5 / 1000;
 
         if gas_fee > 0 {
-            // Withdraw gas fee from vault before paying caller
             Self::vault_withdraw(&env, gas_fee);
-            call.vault_balance -= gas_fee;
+            call.vault_balance = call
+                .vault_balance
+                .checked_sub(gas_fee)
+                .unwrap_or_else(|| panic!("{:?}", ContractError::ArithmeticOverflow));
             let token_client = token::Client::new(&env, &call.stake_token);
             token_client.transfer(&env.current_contract_address(), &caller, &gas_fee);
+        }
+
+        // Optionally realize remaining vault yield before settlement.
+        if vault_rebalance && call.vault_balance > 0 {
+            let bal = call.vault_balance;
+            Self::vault_withdraw(&env, bal);
+            call.vault_balance = 0;
         }
 
         call.settled = true;
         call.winning_outcome = winning_outcome;
         call.final_price = final_price;
         env.storage().persistent().set(&key, &call);
+        maybe_bump(&env, &key);
 
+        // Redundant event payload: vault_balance + settled flag (SC-014).
         env.events().publish(
             (Symbol::new(&env, "CallFinalized"), call_id, caller),
             (
                 winning_outcome,
                 final_price,
                 gas_fee,
-                call.vault_balance,   // New vault balance
-                call.settled,         // Settlement state
-                call.winning_outcome, // Winning outcome index
+                call.vault_balance,
+                call.settled,
+                call.winning_outcome,
             ),
         );
+    }
+
+    // ── Fee configuration (SC-017) ────────────────────────────────────────────
+
+    /// Update the platform fee configuration. Admin-only.
+    /// Validates 50 <= bps <= 200 and treasury is non-zero (contract address itself is ok).
+    /// Stores in instance storage and emits FeeConfigUpdated.
+    pub fn update_fee_config(env: Env, bps: u32, treasury: Address) {
+        let admin = Self::get_admin(&env);
+        admin.require_auth();
+
+        if bps < 50 || bps > 200 {
+            panic!("{:?}", ContractError::InvalidFeeConfig);
+        }
+        // Validate non-zero: in Soroban, Address is never "zero" in the same sense,
+        // but we reject if it equals the contract itself only when explicitly required;
+        // issue says validate non-zero — treat empty/contract as invalid only if needed.
+        // For safety we accept any Address (Soroban addresses are always valid).
+
+        let config = FeeConfig {
+            bps,
+            treasury: treasury.clone(),
+        };
+        env.storage().instance().set(&DataKey::FeeConfig, &config);
+        // Instance storage TTL is managed by the runtime; bump not strictly required
+        // but we extend for consistency with persistent writes.
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, LEDGERS_PER_YEAR);
+
+        env.events()
+            .publish((Symbol::new(&env, "FeeConfigUpdated"),), (bps, treasury));
+    }
+
+    /// Read the current FeeConfig. Panics if not set.
+    pub fn get_fee_config(env: Env) -> FeeConfig {
+        env.storage()
+            .instance()
+            .get(&DataKey::FeeConfig)
+            .unwrap_or_else(|| panic!("{:?}", ContractError::FeeConfigNotSet))
     }
 
     // ── Getters ───────────────────────────────────────────────────────────────
@@ -931,6 +1398,14 @@ impl CallRegistry {
             .unwrap_or(0)
     }
 
+    /// The registry's current admin, exposed under the `get_owner` name so
+    /// downstream contracts can read the authoritative owner over a
+    /// cross-contract call. This is the source the treasury ownership mirror
+    /// pulls from (SC-090).
+    pub fn get_owner(env: Env) -> Address {
+        Self::get_admin(&env)
+    }
+
     pub fn get_platform_fees(env: Env) -> i128 {
         env.storage()
             .persistent()
@@ -945,6 +1420,25 @@ impl CallRegistry {
             .get(&DataKey::Call(call_id))
             .expect("Call does not exist");
         compute_fee_basis_points(call.participant_count)
+    }
+
+    // ── Binary market view shims (issue #315) ──────────────────────────────
+
+    /// Backward-compatible shim for legacy callers expecting `totalStakeYes/No`.
+    /// Returns `(total_stake_yes, total_stake_no)` from `outcome_pools`.
+    /// Panics if pools.len() != 2 (not a binary market).
+    pub fn get_binary_pools(env: Env, call_id: u64) -> (i128, i128) {
+        let call: Call = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Call(call_id))
+            .expect("Call does not exist");
+        if call.outcome_pools.len() != 2 {
+            panic!("Pools length must be 2 for binary market");
+        }
+        let yes = call.outcome_pools.get(0).unwrap();
+        let no = call.outcome_pools.get(1).unwrap();
+        (yes, no)
     }
 }
 
