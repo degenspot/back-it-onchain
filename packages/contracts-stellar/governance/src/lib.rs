@@ -2,7 +2,7 @@
 
 mod contract;
 pub mod errors;
-mod ownership;
+pub mod ownership;
 mod roles;
 mod soulbound;
 mod storage;

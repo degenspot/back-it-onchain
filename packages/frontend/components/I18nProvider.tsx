@@ -13,15 +13,12 @@ export const SUPPORTED_LOCALES = ["en", "es", "de"] as const;
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {
   const [locale, setLocale] = useState("en");
-  const [_isLoaded, setIsLoaded] = useState(false);
 
   useEffect(() => {
     const saved = localStorage.getItem("app-locale");
     if (saved && (SUPPORTED_LOCALES as readonly string[]).includes(saved)) {
       setLocale(saved);
     }
-    setIsLoaded(true);
-
     const handleLocaleChange = (e: CustomEvent<{ locale: string }>) => {
       setLocale(e.detail.locale);
     };

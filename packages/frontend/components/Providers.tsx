@@ -13,9 +13,10 @@ import {
 } from "wagmi";
 import type { Chain } from "viem";
 import { coinbaseWallet, injected } from "wagmi/connectors";
-import { ReactNode, useState } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { Toaster } from "sonner";
 
+import { registerServiceWorker } from "@/src/lib/pwa";
 import { GlobalStateProvider } from "./GlobalState";
 import { NetworkGuard } from "./NetworkGuard";
 import { StellarWalletProvider } from "./StellarWalletProvider";
@@ -62,6 +63,11 @@ export function Providers(props: {
   initialState?: State;
 }) {
   const [queryClient] = useState(() => new QueryClient());
+
+  // Install the app-shell + feed-cache service worker once, per origin.
+  useEffect(() => {
+    void registerServiceWorker();
+  }, []);
 
   return (
     <ChainProvider>
