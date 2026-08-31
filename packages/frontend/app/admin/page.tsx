@@ -1,12 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Shield, Flag, AlertTriangle, Eye, EyeOff, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { Shield, Flag, AlertTriangle, Loader2 } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import { FlaggedTable } from "@/components/admin/FlaggedTable";
 import { DisputeQueue } from "@/components/admin/DisputeQueue";
-import { Button } from "@/components/ui/Button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
+
 
 type AdminTab = "flagged" | "disputes";
 

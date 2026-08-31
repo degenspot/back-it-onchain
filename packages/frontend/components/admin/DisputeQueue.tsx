@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { AlertTriangle, ExternalLink, CheckCircle2, XCircle } from "lucide-react";
+import { CheckCircle2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 
@@ -28,7 +28,7 @@ export function DisputeQueue() {
     }, 500);
   }, []);
   
-  const handleResolve = (id: string, accept: boolean) => {
+  const handleResolve = (id: string, _accept: boolean) => {
     setDisputes(prev => prev.map(d => d.id === id ? { ...d, status: "resolved" } : d));
   };
   
