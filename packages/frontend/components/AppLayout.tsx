@@ -1,4 +1,5 @@
 import { Nav } from "@/components/nav";
+import { OfflineBanner } from "@/src/components/OfflineBanner";
 
 export function AppLayout({
     children,
@@ -9,10 +10,11 @@ export function AppLayout({
 }) {
     return (
         <div className="min-h-screen bg-background">
+            <OfflineBanner />
             <div className="max-w-7xl mx-auto flex justify-center min-h-screen">
                 <Nav />
 
-                <main className="flex-1 max-w-2xl w-full border-x border-border min-h-screen">
+                <main id="main-content" className="flex-1 max-w-2xl w-full border-x border-border min-h-screen">
                     {children}
                 </main>
 

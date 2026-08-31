@@ -4,6 +4,7 @@ import {
   OnModuleInit,
   OnModuleDestroy,
 } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { rpc as SorobanRpc } from '@stellar/stellar-sdk';
 import * as StellarSdk from '@stellar/stellar-sdk';
@@ -13,6 +14,7 @@ import {
   InMemoryLedgerCheckpointStore,
   LedgerCheckpointStore,
 } from './ledger-checkpoint.service';
+import { CallEventStoreService } from './call-event-store.service';
 import { Retryable } from '../../decorators/retryable.decorator';
 
 export interface StellarIndexerConfig {
@@ -30,6 +32,14 @@ export interface ParsedSorobanEvent {
   ledger: number;
   txHash: string;
   sequence: number;
+  /**
+   * Reorg-detection cursor for this event's ledger. Soroban's `getEvents`
+   * RPC does not expose a raw ledger header hash, so `ledgerClosedAt` (the
+   * ledger's close timestamp) is used as the fingerprint instead — it
+   * changes if a ledger at the same sequence number ever closes
+   * differently after a reorg.
+   */
+  blockHash: string;
 
   data: Record<string, any>;
 }
@@ -48,7 +58,11 @@ export class StellarIndexerService implements OnModuleInit, OnModuleDestroy {
   private checkpointStore: LedgerCheckpointStore =
     new InMemoryLedgerCheckpointStore();
 
-  constructor(callRepository: Repository<Call>) {
+  constructor(
+    @InjectRepository(Call)
+    callRepository: Repository<Call>,
+    private readonly callEventStore: CallEventStoreService,
+  ) {
     this.callRepository = callRepository;
   }
 
@@ -280,6 +294,7 @@ export class StellarIndexerService implements OnModuleInit, OnModuleDestroy {
         contractId,
         ledger: event.ledger,
         txHash: event.txHash,
+        blockHash: event.ledgerClosedAt,
         sequence: event.id.split('-')[1] ? parseInt(event.id.split('-')[1]) : 0,
         data: decodedData,
       };
@@ -405,37 +420,20 @@ export class StellarIndexerService implements OnModuleInit, OnModuleDestroy {
 
   private async storeEvent(parsedEvent: ParsedSorobanEvent): Promise<void> {
     try {
-      // Check if event already exists
-      const existing = await this.callRepository.findOne({
-        where: {
-          chain: ChainType.STELLAR,
-          txHash: parsedEvent.txHash,
-          eventSequence: parsedEvent.sequence,
-        },
-      });
-
-      if (existing) {
-        this.logger.debug(
-          `Event already indexed: ${parsedEvent.txHash}:${parsedEvent.sequence}`,
-        );
-        return;
-      }
-
-      const call = this.callRepository.create({
+      const call = await this.callEventStore.upsertEvent({
         chain: ChainType.STELLAR,
         txHash: parsedEvent.txHash,
-        stellarContractId: parsedEvent.contractId,
-        contractId: parsedEvent.contractId,
         eventType: parsedEvent.type,
-        ledgerHeight: parsedEvent.ledger,
+        contractId: parsedEvent.contractId,
+        stellarContractId: parsedEvent.contractId,
         eventSequence: parsedEvent.sequence,
+        ledgerHeight: parsedEvent.ledger,
+        blockHash: parsedEvent.blockHash,
         eventData: parsedEvent.data,
       });
 
-      await this.callRepository.save(call);
-
       this.logger.log(
-        `Stored Stellar event: ${parsedEvent.type} from contract ${parsedEvent.contractId}`,
+        `Stored Stellar event: ${parsedEvent.type} from contract ${parsedEvent.contractId} (call ${call.id})`,
       );
     } catch (error) {
       this.logger.error('Error storing event:', error);

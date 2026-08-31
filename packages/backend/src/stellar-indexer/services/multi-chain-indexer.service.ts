@@ -6,6 +6,8 @@ import {
 } from '@nestjs/common';
 import { StellarIndexerService } from './stellar-indexer.service';
 import { BaseIndexerService } from './base-indexer.service';
+import { CallEventStoreService } from './call-event-store.service';
+import { ChainType } from '../entities/call.entity';
 
 export interface MultiChainIndexerConfig {
   enableBase?: boolean;
@@ -33,6 +35,7 @@ export class MultiChainIndexerService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly stellarIndexer: StellarIndexerService,
     private readonly baseIndexer: BaseIndexerService,
+    private readonly callEventStore: CallEventStoreService,
   ) {}
 
   async initialize(config: MultiChainIndexerConfig): Promise<void> {
@@ -159,5 +162,27 @@ export class MultiChainIndexerService implements OnModuleInit, OnModuleDestroy {
       stellarEnabled: !!this.config?.enableStellar,
       baseEnabled: !!this.config?.enableBase,
     };
+  }
+
+  /**
+   * Non-orphaned events for a chain from the unified `calls` table,
+   * routed through the shared CallEventStoreService (BE-04).
+   */
+  async getActiveEvents(chain: ChainType, limit = 50) {
+    return this.callEventStore.getActiveEvents(chain, limit);
+  }
+
+  /**
+   * Manually triggers reorg detection for a given chain/height/blockHash.
+   * Both per-chain indexers call this internally as events stream in;
+   * this passthrough lets an admin or webhook re-check a specific height
+   * on demand (e.g. after an RPC provider reports a reorg out-of-band).
+   */
+  async checkForReorg(
+    chain: ChainType,
+    ledgerHeight: number,
+    blockHash: string,
+  ): Promise<number> {
+    return this.callEventStore.handleReorg(chain, ledgerHeight, blockHash);
   }
 }

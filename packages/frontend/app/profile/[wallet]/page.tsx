@@ -18,6 +18,7 @@ import { ExportButton } from '@/src/components/ExportButton';
 import { FollowButton } from '@/src/components/follow';
 import { useProfile } from '@/src/hooks/useProfile';
 import { useFollow } from '@/src/hooks/useFollow';
+import { AvatarUploader } from '@/src/components/AvatarUploader';
 
 export default function WalletProfilePage() {
   const params = useParams<{ wallet: string | string[] }>();
@@ -75,6 +76,12 @@ export default function WalletProfilePage() {
                 </>
               }
             />
+
+            {isSelf ? (
+              <div className="px-4 pb-2">
+                <AvatarUploader size={96} />
+              </div>
+            ) : null}
 
             <div className="px-4 pb-8">
               {isHistoryLoading ? (

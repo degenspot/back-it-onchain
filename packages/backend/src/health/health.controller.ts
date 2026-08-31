@@ -1,4 +1,5 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Res } from '@nestjs/common';
+import { Response } from 'express';
 import { SkipThrottle } from '@nestjs/throttler';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -70,7 +71,7 @@ export class HealthController {
    * keep serving most traffic, but an operator should be paged.
    */
   @Get('ready')
-  async readiness(): Promise<ReadinessResponse> {
+  async readiness(@Res({ passthrough: true }) res?: Response): Promise<ReadinessResponse> {
     const threshold = this.configService.get<number>(
       'HEALTH_DEGRADED_THRESHOLD',
       1,
@@ -110,6 +111,10 @@ export class HealthController {
       status = 'error';
     } else if (nonCriticalDown > 0) {
       status = 'degraded';
+    }
+
+    if (status === 'error' && res) {
+      res.status(503);
     }
 
     return { status, info, details };

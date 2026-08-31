@@ -28,7 +28,7 @@ export function StakeModal({ open, onClose, callId, callTitle }: StakeModalProps
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="fixed inset-0 bg-black/80" onClick={onClose} />
+      <button type="button" aria-label="Close" tabIndex={-1} className="fixed inset-0 bg-black/80" onClick={onClose} />
       <div className="relative bg-card border border-border rounded-2xl p-6 w-full max-w-md shadow-xl" data-testid="stake-modal">
         <button onClick={onClose} className="absolute top-4 right-4 text-muted-foreground hover:text-foreground">
           <X className="h-5 w-5" />
@@ -60,12 +60,13 @@ export function StakeModal({ open, onClose, callId, callTitle }: StakeModalProps
         {/* Amount Input */}
         <div className="mb-4">
           <div className="flex items-center justify-between mb-1.5">
-            <label className="text-sm font-medium">Amount</label>
+            <label htmlFor="stake-amount" className="text-sm font-medium">Amount</label>
             <button onClick={() => setAmount(String(maxAmount))} className="text-xs text-primary hover:underline">
               Max: {maxAmount}
             </button>
           </div>
           <input
+            id="stake-amount"
             type="number"
             placeholder="0.00"
             value={amount}

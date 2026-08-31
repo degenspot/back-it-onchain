@@ -36,8 +36,9 @@ export function CreateCall() {
             <h2 className="text-2xl font-bold mb-4">Create a Call</h2>
             <div className="space-y-4">
                 <div>
-                    <label className="block text-sm font-medium text-gray-700">Token Address</label>
+                    <label htmlFor="cc-token" className="block text-sm font-medium text-gray-700">Token Address</label>
                     <input
+                        id="cc-token"
                         type="text"
                         className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2 border"
                         value={token}
@@ -46,8 +47,9 @@ export function CreateCall() {
                     />
                 </div>
                 <div>
-                    <label className="block text-sm font-medium text-gray-700">Stake Amount (USDC)</label>
+                    <label htmlFor="cc-amount" className="block text-sm font-medium text-gray-700">Stake Amount (USDC)</label>
                     <input
+                        id="cc-amount"
                         type="number"
                         className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2 border"
                         value={amount}
@@ -56,8 +58,9 @@ export function CreateCall() {
                     />
                 </div>
                 <div>
-                    <label className="block text-sm font-medium text-gray-700">Target Price ($)</label>
+                    <label htmlFor="cc-target" className="block text-sm font-medium text-gray-700">Target Price ($)</label>
                     <input
+                        id="cc-target"
                         type="number"
                         className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2 border"
                         value={targetPrice}
@@ -66,8 +69,9 @@ export function CreateCall() {
                     />
                 </div>
                 <div>
-                    <label className="block text-sm font-medium text-gray-700">End Date</label>
+                    <label htmlFor="cc-enddate" className="block text-sm font-medium text-gray-700">End Date</label>
                     <input
+                        id="cc-enddate"
                         type="datetime-local"
                         className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2 border"
                         value={endDate}

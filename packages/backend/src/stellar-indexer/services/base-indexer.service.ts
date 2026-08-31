@@ -4,15 +4,10 @@ import {
   OnModuleInit,
   OnModuleDestroy,
 } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Call, ChainType } from '../entities/call.entity';
-// import { InjectRepository } from '@nestjs/typeorm'; // This was replaced by mistake, but I need to make sure I don't leave duplicates.
-// The previous tool execution replaced:
-// import { InjectRepository } from '@nestjs/typeorm';
-// with:
-// import { Call, ChainType } from '../entities/call.entity';
-// resulting in two lines of the same import.
-// I will just remove one of them.
+import { CallEventStoreService } from './call-event-store.service';
 
 export interface BaseIndexerConfig {
   rpcUrl: string;
@@ -32,7 +27,11 @@ export class BaseIndexerService implements OnModuleInit, OnModuleDestroy {
   private currentBlock: number;
   private config: BaseIndexerConfig;
 
-  constructor(private callRepository: Repository<Call>) {}
+  constructor(
+    @InjectRepository(Call)
+    private callRepository: Repository<Call>,
+    private readonly callEventStore: CallEventStoreService,
+  ) {}
 
   async initialize(config: BaseIndexerConfig): Promise<void> {
     this.config = {
@@ -117,6 +116,11 @@ export class BaseIndexerService implements OnModuleInit, OnModuleDestroy {
       // TODO: Implement Base chain event fetching
       // This is a stub for the existing Base indexer integration
       // Implement using ethers.js or viem for Base Sepolia/mainnet
+      //
+      // Once real log fetching lands, each parsed event should be persisted
+      // via `this.callEventStore.upsertEvent(...)` (not `callRepository`
+      // directly) so Base gets the same idempotent-upsert + reorg-detection
+      // guarantees as the Stellar indexer — see CallEventStoreService.
 
       this.logger.debug(`Base indexer polling at block ${this.currentBlock}`);
     } catch (error) {
@@ -165,5 +169,19 @@ export class BaseIndexerService implements OnModuleInit, OnModuleDestroy {
       totalEvents: events.length,
       lastIndexedBlock: this.currentBlock,
     };
+  }
+
+  /**
+   * Runs reorg detection for a given block height against the shared
+   * CallEventStoreService (BE-04). Exposed so MultiChainIndexerService can
+   * trigger it explicitly (e.g. from a webhook or manual admin action)
+   * ahead of the real event-fetching implementation landing.
+   */
+  async checkForReorg(blockHeight: number, blockHash: string): Promise<number> {
+    return this.callEventStore.handleReorg(
+      ChainType.BASE,
+      blockHeight,
+      blockHash,
+    );
   }
 }

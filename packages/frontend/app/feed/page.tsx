@@ -6,6 +6,7 @@ import { useGlobalState } from "@/components/GlobalState";
 import { CallCard } from "@/components/CallCard";
 import { CallCardSkeleton } from "@/components/CallCardSkeleton";
 import { type Call, type User } from "@/lib/types";
+import { FeedPersonalize } from "@/src/components/FeedPersonalize";
 
 
 const API_BASE_URL = (
@@ -120,6 +121,7 @@ export default function FeedPage() {
 
   const RightSidebar = (
     <div className="space-y-6">
+      <FeedPersonalize />
       <div className="bg-secondary/20 rounded-xl p-6 border border-border">
         <h3 className="font-bold text-lg mb-2">Trending Markets</h3>
         <div className="space-y-4">

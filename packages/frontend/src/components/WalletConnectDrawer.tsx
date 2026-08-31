@@ -23,7 +23,7 @@ export function WalletConnectDrawer() {
       
       {isOpen && (
         <div className="fixed inset-0 z-50">
-          <div className="fixed inset-0 bg-black/80" onClick={() => setIsOpen(false)} />
+          <button type="button" aria-label="Close" tabIndex={-1} className="fixed inset-0 bg-black/80" onClick={() => setIsOpen(false)} />
           <div className="fixed right-0 top-0 h-full w-80 bg-card border-l border-border p-6 shadow-xl animate-in slide-in-from-right">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-lg font-bold">Wallet</h2>
