@@ -105,10 +105,17 @@ export const validationSchema = Joi.object({
   // Max number of due calls resolved per resolveDueCalls() sweep.
   ORACLE_RESOLUTION_BATCH_SIZE: Joi.number().integer().min(1).default(20),
 
-  // ── Indexer (Base Sepolia) ──────────────────────────────────────────────
+  // ── Indexer (Base / Base Sepolia) — BE-05 ────────────────────────────────
+  BASE_RPC_URL: Joi.string()
+    .uri({ scheme: ['http', 'https'] })
+    .optional(),
   BASE_SEPOLIA_RPC_URL: Joi.string()
     .uri({ scheme: ['http', 'https'] })
     .optional(),
+  // Polling tunables for Base Data API polling (BE-05)
+  BASE_POLL_INTERVAL_MS: Joi.number().integer().min(1000).default(15000),
+  BASE_MAX_BLOCK_RANGE: Joi.number().integer().min(100).default(5000),
+  BASE_REORG_DEPTH: Joi.number().integer().min(0).default(12),
   CALL_REGISTRY_ADDRESS: Joi.string()
     .pattern(/^0x[0-9a-fA-F]{40}$/)
     .optional()

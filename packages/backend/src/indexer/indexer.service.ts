@@ -3,6 +3,7 @@ import {
   Injectable,
   Logger,
   OnModuleInit,
+  OnModuleDestroy,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -22,32 +23,50 @@ import {
   IndexerWebhookEventType,
 } from './dto/indexer-webhook.dto';
 
-// ─── Constants ───────────────────────────────────────────────────────────────
+// ─── ABIs ────────────────────────────────────────────────────────────────────
 
 const CALL_REGISTRY_ABI = [
   'event CallCreated(uint256 indexed callId, address indexed creator, address stakeToken, uint256 stakeAmount, uint256 startTs, uint256 endTs, address tokenAddress, bytes32 pairId, string ipfsCID)',
   'event StakeAdded(uint256 indexed callId, address indexed staker, bool position, uint256 amount)',
+  // BE-05 required events — OutcomeManager contract
+  'event OutcomeSubmitted(uint256 indexed callId, bool outcome, uint256 finalPrice, address oracle)',
+  'event PayoutWithdrawn(uint256 indexed callId, address indexed recipient, uint256 amount)',
+  // Legacy events kept for backwards-compatibility
   'event CallResolved(uint256 indexed callId, bool outcome, uint256 finalPrice)',
   'event AdminParamsChanged(uint256 feePercent)',
 ];
 
-/** How long to wait before attempting to reconnect the live listener (ms). */
-const LISTENER_RECONNECT_DELAY_MS = 10_000;
+// Interface used to decode batch-fetched logs (BE-05)
+const INDEXER_INTERFACE = new ethers.Interface(CALL_REGISTRY_ABI);
 
-/** Maximum reconnect attempts before giving up on the live listener. */
+// ─── Constants ───────────────────────────────────────────────────────────────
+
+const LISTENER_RECONNECT_DELAY_MS = 10_000;
 const LISTENER_MAX_RECONNECTS = 10;
+
+// BE-05 polling tunables (overridable via env)
+const DEFAULT_POLL_INTERVAL_MS = 15_000;
+const DEFAULT_MAX_BLOCK_RANGE = 5_000;
+const DEFAULT_REORG_DEPTH = 12;
 
 // ─── Service ──────────────────────────────────────────────────────────────────
 
 @Injectable()
-export class IndexerService implements OnModuleInit {
+export class IndexerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(IndexerService.name);
 
   private provider: ethers.JsonRpcProvider;
   private registryAddress: string;
+  private outcomeManagerAddress: string | null = null;
 
-  /** Tracks how many times the live listener has been reconnected. */
   private reconnectCount = 0;
+
+  // ─── BE-05 polling state ─────────────────────────────────────────────────
+  private pollingTimer?: NodeJS.Timeout;
+  private isPolling = false;
+  private readonly pollIntervalMs: number;
+  private readonly maxBlockRange: number;
+  private readonly reorgDepth: number;
 
   constructor(
     private configService: ConfigService,
@@ -63,9 +82,23 @@ export class IndexerService implements OnModuleInit {
     private eventEmitter: EventEmitter2,
     private notificationEventsService: NotificationEventsService,
   ) {
-    const rpcUrl = this.configService.get<string>('BASE_SEPOLIA_RPC_URL');
+    // BE-05: configurable BASE_RPC_URL with fallback to BASE_SEPOLIA_RPC_URL
+    const rpcUrl =
+      this.configService.get<string>('BASE_RPC_URL') ||
+      this.configService.get<string>('BASE_SEPOLIA_RPC_URL');
     this.registryAddress =
       this.configService.get<string>('CALL_REGISTRY_ADDRESS') || '';
+    this.outcomeManagerAddress =
+      this.configService.get<string>('OUTCOME_MANAGER_ADDRESS') || null;
+
+    this.pollIntervalMs =
+      this.configService.get<number>('BASE_POLL_INTERVAL_MS') ??
+      DEFAULT_POLL_INTERVAL_MS;
+    this.maxBlockRange =
+      this.configService.get<number>('BASE_MAX_BLOCK_RANGE') ??
+      DEFAULT_MAX_BLOCK_RANGE;
+    this.reorgDepth =
+      this.configService.get<number>('BASE_REORG_DEPTH') ?? DEFAULT_REORG_DEPTH;
 
     if (rpcUrl) {
       this.provider = new ethers.JsonRpcProvider(rpcUrl);
@@ -77,13 +110,12 @@ export class IndexerService implements OnModuleInit {
   async onModuleInit() {
     if (!this.provider || !this.registryAddress) {
       this.logger.warn(
-        'BASE_SEPOLIA_RPC_URL or CALL_REGISTRY_ADDRESS not set — indexer disabled',
+        'BASE_RPC_URL (or BASE_SEPOLIA_RPC_URL) or CALL_REGISTRY_ADDRESS not set — indexer disabled',
       );
       return;
     }
 
     try {
-      // Both calls are retried internally via @Retryable
       const [network, blockNumber] = await Promise.all([
         this.getNetwork(),
         this.getBlockNumber(),
@@ -91,36 +123,33 @@ export class IndexerService implements OnModuleInit {
 
       this.logger.log(`Connected to Chain ID: ${network.chainId}`);
       this.logger.log(`Current Block: ${blockNumber}`);
-      this.logger.log(
-        `RPC URL: ${this.configService.get<string>('BASE_SEPOLIA_RPC_URL')}`,
-      );
+      const rpcUrl =
+        this.configService.get<string>('BASE_RPC_URL') ||
+        this.configService.get<string>('BASE_SEPOLIA_RPC_URL');
+      this.logger.log(`RPC URL: ${rpcUrl}`);
 
       await this.syncHistoricalEvents();
       this.startListening();
+      // BE-05: cursor-persisted polling replaces/enhances the live listener
+      this.startPolling();
     } catch (err) {
-      // If even the retried init calls fail, log and leave the indexer offline
-      // rather than crashing the whole application.
       this.logger.error(
         `Indexer failed to initialise after retries: ${(err as Error).message}`,
       );
     }
   }
 
+  async onModuleDestroy() {
+    this.stopPolling();
+  }
+
   // ─── Retried RPC primitives ────────────────────────────────────────────────
 
-  /**
-   * Fetches the connected network info.
-   * Retried up to 4 times with exponential backoff before throwing.
-   */
   @Retryable({ maxAttempts: 4, operationName: 'indexer:getNetwork' })
   private async getNetwork(): Promise<ethers.Network> {
     return this.provider.getNetwork();
   }
 
-  /**
-   * Fetches the latest block number.
-   * Retried up to 4 times with exponential backoff before throwing.
-   */
   @Retryable({ maxAttempts: 4, operationName: 'indexer:getBlockNumber' })
   private async getBlockNumber(): Promise<number> {
     return this.provider.getBlockNumber();
@@ -146,6 +175,335 @@ export class IndexerService implements OnModuleInit {
     return results as ethers.EventLog[];
   }
 
+  /**
+   * BE-05: getLogs with exponential backoff via withRetry.
+   * Used for batch-fetch polling of CallCreated | StakeAdded | OutcomeSubmitted | PayoutWithdrawn.
+   */
+  private async getLogsWithRetry(
+    filter: ethers.Filter,
+  ): Promise<ethers.Log[]> {
+    return withRetry(() => this.provider.getLogs(filter), {
+      maxAttempts: 4,
+      baseDelayMs: 1_000,
+      operationName: 'indexer:getLogs',
+    });
+  }
+
+  private async getBlockWithRetry(
+    blockNumber: number,
+  ): Promise<ethers.Block | null> {
+    return withRetry(() => this.provider.getBlock(blockNumber), {
+      maxAttempts: 3,
+      baseDelayMs: 500,
+      operationName: 'indexer:getBlock',
+    });
+  }
+
+  // ─── Platform-settings cursor (BE-05) ─────────────────────────────────────
+
+  /**
+   * Loads the last fully-processed block from platform_settings.
+   * Returns 0 if no cursor has been persisted yet (genesis).
+   */
+  async getLastCursor(): Promise<number> {
+    try {
+      const settings = await this.settingsRepository.findOne({
+        where: { id: 1 },
+      });
+      if (!settings || !settings.lastBlock) return 0;
+      const n = Number(settings.lastBlock);
+      return Number.isFinite(n) && n >= 0 ? n : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  async getCursorBlockHash(): Promise<string | null> {
+    try {
+      const settings = await this.settingsRepository.findOne({
+        where: { id: 1 },
+      });
+      return settings?.lastBlockHash ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Persists the cursor after a batch has been fully processed.
+   * Uses withRetry internally? No — TypeORM save is local DB, not RPC.
+   */
+  async saveCursor(blockNumber: number, blockHash?: string | null): Promise<void> {
+    let settings = await this.settingsRepository.findOne({ where: { id: 1 } });
+    if (!settings) {
+      settings = this.settingsRepository.create({
+        id: 1,
+        feePercent: 0,
+        lastBlock: blockNumber.toString(),
+        lastBlockHash: blockHash ?? null,
+      } as Partial<PlatformSettings> as PlatformSettings);
+    } else {
+      settings.lastBlock = blockNumber.toString();
+      if (blockHash !== undefined) {
+        (settings as any).lastBlockHash = blockHash;
+      }
+    }
+    await this.settingsRepository.save(settings);
+    this.logger.debug(`Cursor persisted → lastBlock=${blockNumber}${blockHash ? ` hash=${blockHash}` : ''}`);
+  }
+
+  /**
+   * BE-05 reorg handling.
+   * Checks whether the chain has reorganized at the previously-persisted cursor height
+   * by comparing the stored blockHash with the current chain's hash at that height.
+   * If a mismatch is detected, the cursor is rewound by 2 * reorgDepth blocks so the
+   * next poll re-processes the divergent window (handlers are idempotent).
+   * Also handles the case where the latest block is behind the cursor (deep reorg).
+   */
+  async handleReorg(currentBlockNumber: number): Promise<number> {
+    const cursor = await this.getLastCursor();
+    const storedHash = await this.getCursorBlockHash();
+
+    // Deep reorg where chain tip moved behind cursor
+    if (cursor > currentBlockNumber) {
+      const rewound = Math.max(0, currentBlockNumber - this.reorgDepth);
+      this.logger.warn(
+        `Reorg detected: cursor ${cursor} > tip ${currentBlockNumber} — rewinding to ${rewound}`,
+      );
+      await this.saveCursor(rewound, null);
+      return rewound;
+    }
+
+    // If we have a stored hash, verify it hasn't been orphaned
+    if (cursor > 0 && storedHash) {
+      try {
+        const block = await this.getBlockWithRetry(cursor);
+        if (block && block.hash !== storedHash) {
+          const rewound = Math.max(0, cursor - this.reorgDepth * 2);
+          this.logger.warn(
+            `Reorg detected at height ${cursor}: stored hash ${storedHash} != chain hash ${block.hash} — rewinding cursor to ${rewound}`,
+          );
+          await this.saveCursor(rewound, block.hash ?? null);
+          return rewound;
+        }
+      } catch (err) {
+        this.logger.warn(`Reorg check failed for block ${cursor}: ${(err as Error).message}`);
+      }
+    }
+
+    return cursor;
+  }
+
+  // ─── BE-05 batch polling ───────────────────────────────────────────────────
+
+  /**
+   * Fetches logs in batches via ethers getLogs, with per-batch backoff (withRetry).
+   * Handles both CALL_REGISTRY and OUTCOME_MANAGER addresses.
+   */
+  async fetchLogsBatched(
+    fromBlock: number,
+    toBlock: number,
+  ): Promise<ethers.Log[]> {
+    const allLogs: ethers.Log[] = [];
+    const addresses = [this.registryAddress];
+    if (this.outcomeManagerAddress) {
+      addresses.push(this.outcomeManagerAddress);
+    }
+
+    for (let start = fromBlock; start <= toBlock; start += this.maxBlockRange) {
+      const end = Math.min(start + this.maxBlockRange - 1, toBlock);
+      for (const address of addresses) {
+        const filter: ethers.Filter = {
+          address,
+          fromBlock: start,
+          toBlock: end,
+        };
+        try {
+          const logs = await this.getLogsWithRetry(filter);
+          allLogs.push(...logs);
+          this.logger.debug(
+            `Fetched ${logs.length} logs for ${address} blocks ${start}–${end}`,
+          );
+        } catch (err) {
+          if (err instanceof RpcExhaustedError) {
+            this.logger.error(
+              `Batch getLogs ${start}–${end} for ${address} failed after ${err.attempts} attempts: ${err.lastError.message}`,
+            );
+            throw err;
+          }
+          throw err;
+        }
+      }
+    }
+
+    // Sort by blockNumber then logIndex to ensure deterministic processing order
+    allLogs.sort((a, b) => {
+      if (a.blockNumber !== b.blockNumber) return a.blockNumber - b.blockNumber;
+      return (a.index ?? 0) - (b.index ?? 0);
+    });
+
+    return allLogs;
+  }
+
+  private async processLog(log: ethers.Log): Promise<void> {
+    // Ethers v6 sets `removed` when a log was orphaned by a reorg — skip and log
+    if ((log as any).removed) {
+      this.logger.warn(
+        `Skipping removed log at block ${log.blockNumber} tx ${log.transactionHash} (reorg)`,
+      );
+      return;
+    }
+
+    let parsed: ethers.LogDescription | null = null;
+    try {
+      parsed = INDEXER_INTERFACE.parseLog({
+        topics: log.topics as string[],
+        data: log.data,
+      });
+    } catch {
+      // Not one of our indexed events — ignore
+      return;
+    }
+    if (!parsed) return;
+
+    const { name, args } = parsed;
+
+    try {
+      switch (name) {
+        case 'CallCreated':
+          await this.handleCallCreated(
+            args[0] as bigint,
+            args[1] as string,
+            args[2] as string,
+            args[3] as bigint,
+            args[4] as bigint,
+            args[5] as bigint,
+            args[6] as string,
+            args[7] as string,
+            args[8] as string,
+          );
+          break;
+        case 'StakeAdded':
+          await this.handleStakeAdded(
+            args[0] as bigint,
+            args[1] as string,
+            args[2] as boolean,
+            args[3] as bigint,
+          );
+          break;
+        case 'OutcomeSubmitted':
+          await this.handleOutcomeSubmitted(
+            args[0] as bigint,
+            args[1] as boolean,
+            args[2] as bigint,
+            args[3] as string,
+          );
+          break;
+        case 'PayoutWithdrawn':
+          await this.handlePayoutWithdrawn(
+            args[0] as bigint,
+            args[1] as string,
+            args[2] as bigint,
+          );
+          break;
+        case 'CallResolved':
+          // Legacy alias for OutcomeSubmitted
+          await this.handleCallResolved(
+            args[0] as bigint,
+            args[1] as boolean,
+            args[2] as bigint,
+          );
+          break;
+        case 'AdminParamsChanged':
+          await this.handleAdminParamsChanged(args[0] as bigint);
+          break;
+        default:
+          this.logger.debug(`Unhandled event ${name} at block ${log.blockNumber}`);
+      }
+    } catch (err) {
+      this.logger.error(
+        `Error processing ${name} at block ${log.blockNumber}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Single poll iteration: resumes from cursor, handles reorgs, batch-fetches
+   * via getLogs with backoff, processes logs sequentially, and advances cursor.
+   */
+  async pollOnce(): Promise<{ fromBlock: number; toBlock: number; logCount: number }> {
+    const latestBlock = await this.getBlockNumber();
+    // handleReorg may rewind the cursor if a reorg is detected
+    await this.handleReorg(latestBlock);
+    const cursor = await this.getLastCursor();
+
+    // Determine start block: if no cursor yet, scan from genesis; otherwise continue after cursor.
+    // handleReorg already rewound cursor when needed, so cursor is the correct resume point.
+    const startBlock = cursor === 0 ? 0 : cursor + 1;
+
+    if (startBlock > latestBlock) {
+      this.logger.debug(`pollOnce: no new blocks (cursor=${cursor}, tip=${latestBlock})`);
+      return { fromBlock: startBlock, toBlock: latestBlock, logCount: 0 };
+    }
+
+    this.logger.log(`Polling Base blocks ${startBlock}–${latestBlock} (cursor=${cursor}) via getLogs batch=${this.maxBlockRange}`);
+
+    const logs = await this.fetchLogsBatched(startBlock, latestBlock);
+    this.logger.log(`Processing ${logs.length} logs from blocks ${startBlock}–${latestBlock}`);
+
+    for (const log of logs) {
+      await this.processLog(log);
+    }
+
+    // Persist cursor with tip hash for next reorg check (withRetry already applied to RPC calls)
+    let tipHash: string | null = null;
+    try {
+      const tipBlock = await this.getBlockWithRetry(latestBlock);
+      tipHash = tipBlock?.hash ?? null;
+    } catch {
+      // non-fatal — still advance cursor
+    }
+    await this.saveCursor(latestBlock, tipHash);
+
+    return { fromBlock: startBlock, toBlock: latestBlock, logCount: logs.length };
+  }
+
+  /**
+   * Starts interval polling. Idempotent.
+   */
+  startPolling(): void {
+    if (this.isPolling) {
+      this.logger.warn('Polling already running');
+      return;
+    }
+    this.isPolling = true;
+    this.logger.log(
+      `Starting Base polling every ${this.pollIntervalMs}ms (batch=${this.maxBlockRange}, reorgDepth=${this.reorgDepth})`,
+    );
+
+    // Immediate poll then interval
+    void this.pollOnce().catch((err) =>
+      this.logger.error(`Initial poll failed: ${(err as Error).message}`),
+    );
+
+    this.pollingTimer = setInterval(() => {
+      void this.pollOnce().catch((err) =>
+        this.logger.error(`Poll cycle failed: ${(err as Error).message}`),
+      );
+    }, this.pollIntervalMs);
+    // Allow process to exit if this is the only timer
+    if (this.pollingTimer.unref) this.pollingTimer.unref();
+  }
+
+  stopPolling(): void {
+    if (this.pollingTimer) {
+      clearInterval(this.pollingTimer);
+      this.pollingTimer = undefined;
+    }
+    this.isPolling = false;
+    this.logger.log('Base polling stopped');
+  }
+
   // ─── Historical sync ───────────────────────────────────────────────────────
 
   async syncHistoricalEvents(): Promise<void> {
@@ -159,18 +517,46 @@ export class IndexerService implements OnModuleInit {
 
     try {
       const currentBlock = await this.getBlockNumber();
+      const cursor = await this.getLastCursor();
+      const fromBlock = cursor > 0 ? cursor + 1 : 0;
 
-      // queryFilter is already wrapped with @Retryable above
+      if (fromBlock > currentBlock) {
+        this.logger.log(`No historical blocks to sync (cursor=${cursor}, tip=${currentBlock})`);
+        return;
+      }
+
+      // Prefer batched getLogs path (BE-05) but keep queryFilter fallback for legacy chains
+      // For backward-compat we still support queryFilter; if that fails we fall back to getLogs
+      try {
+        const logs = await this.fetchLogsBatched(fromBlock, currentBlock);
+        this.logger.log(`Found ${logs.length} historical logs via batch getLogs (${fromBlock}→${currentBlock})`);
+        for (const log of logs) {
+          await this.processLog(log);
+        }
+        // Persist cursor after historical sync
+        let tipHash: string | null = null;
+        try {
+          const tip = await this.getBlockWithRetry(currentBlock);
+          tipHash = tip?.hash ?? null;
+        } catch {}
+        await this.saveCursor(currentBlock, tipHash);
+        this.logger.log('Historical sync complete (via getLogs)');
+        return;
+      } catch (err) {
+        this.logger.warn(`Batch getLogs sync failed, falling back to queryFilter: ${(err as Error).message}`);
+      }
+
+      // Legacy queryFilter path
       const [
         callCreatedEvents,
         stakeAddedEvents,
         callResolvedEvents,
         adminParamsEvents,
       ] = await Promise.all([
-        this.queryFilter(contract, 'CallCreated', 0, currentBlock),
-        this.queryFilter(contract, 'StakeAdded', 0, currentBlock),
-        this.queryFilter(contract, 'CallResolved', 0, currentBlock),
-        this.queryFilter(contract, 'AdminParamsChanged', 0, currentBlock),
+        this.queryFilter(contract, 'CallCreated', fromBlock, currentBlock),
+        this.queryFilter(contract, 'StakeAdded', fromBlock, currentBlock),
+        this.queryFilter(contract, 'CallResolved', fromBlock, currentBlock),
+        this.queryFilter(contract, 'AdminParamsChanged', fromBlock, currentBlock),
       ]);
 
       this.logger.log(
@@ -200,7 +586,6 @@ export class IndexerService implements OnModuleInit {
       for (const event of stakeAddedEvents) {
         if (event.args) {
           const a = event.args;
-          // emitNotification=false: don't flood users with historical stake notifications
           await this.handleStakeAdded(
             a[0] as bigint,
             a[1] as string,
@@ -214,7 +599,6 @@ export class IndexerService implements OnModuleInit {
       for (const event of callResolvedEvents) {
         if (event.args) {
           const a = event.args;
-          // emitNotification=false: don't notify for historical resolutions
           await this.handleCallResolved(
             a[0] as bigint,
             a[1] as boolean,
@@ -230,6 +614,13 @@ export class IndexerService implements OnModuleInit {
         }
       }
 
+      let tipHash: string | null = null;
+      try {
+        const tip = await this.getBlockWithRetry(currentBlock);
+        tipHash = tip?.hash ?? null;
+      } catch {}
+      await this.saveCursor(currentBlock, tipHash);
+
       this.logger.log('Historical sync complete');
     } catch (err) {
       if (err instanceof RpcExhaustedError) {
@@ -242,7 +633,6 @@ export class IndexerService implements OnModuleInit {
           (err as Error).message,
         );
       }
-      // Do not rethrow — a failed historical sync should not prevent the live listener from starting
     }
   }
 
@@ -272,7 +662,6 @@ export class IndexerService implements OnModuleInit {
       try {
         conditionJson = await this.fetchIpfsData(ipfsCID);
       } catch (err) {
-        // IPFS fetch exhausted all retries — store the call anyway with empty metadata
         this.logger.error(
           `Failed to fetch IPFS data for ${ipfsCID} after retries: ${(err as Error).message}`,
         );
@@ -336,7 +725,6 @@ export class IndexerService implements OnModuleInit {
 
     await this.callsRepository.save(call);
 
-    // Record the individual stake event for trending analytics.
     const activity = this.stakeActivityRepository.create({
       callOnchainId: callId.toString(),
       stakerWallet: staker,
@@ -384,10 +772,72 @@ export class IndexerService implements OnModuleInit {
         callTitle: call.title || call.tokenAddress,
         outcome: outcome ? 'yes' : 'no',
         creatorWallet: call.creatorWallet,
-        // Individual staker tracking is not yet in the DB; creator is notified via the listener.
         stakers: [],
       });
     }
+  }
+
+  /**
+   * BE-05: Handles OutcomeSubmitted from OutcomeManager.
+   * Idempotent — delegates to handleCallResolved for backwards-compat on the Call entity.
+   */
+  async handleOutcomeSubmitted(
+    callId: bigint,
+    outcome: boolean,
+    finalPrice: bigint,
+    oracle: string,
+    emitNotification = true,
+  ): Promise<void> {
+    this.logger.log(
+      `Processing OutcomeSubmitted: callId=${callId} outcome=${outcome} price=${finalPrice} oracle=${oracle}`,
+    );
+    // Reuse resolved logic; OutcomeSubmitted is the canonical resolution event going forward
+    await this.handleCallResolved(callId, outcome, finalPrice, emitNotification);
+  }
+
+  /**
+   * BE-05: Handles PayoutWithdrawn — records audit and emits event.
+   * Idempotent no-op if call not found.
+   */
+  async handlePayoutWithdrawn(
+    callId: bigint,
+    recipient: string,
+    amount: bigint,
+  ): Promise<void> {
+    this.logger.log(
+      `Processing PayoutWithdrawn: callId=${callId} recipient=${recipient} amount=${ethers.formatUnits(amount, 18)}`,
+    );
+
+    const call = await this.callsRepository.findOne({
+      where: { callOnchainId: callId.toString() },
+    });
+    if (!call) {
+      this.logger.warn(`PayoutWithdrawn for unknown Call ${callId} — skipping`);
+      return;
+    }
+
+    // Optional: persist an audit log for payout
+    try {
+      const entry = this.auditLogRepository.create({
+        action: 'indexer.payout_withdrawn',
+        actor: recipient,
+        targetResource: callId.toString(),
+        payload: {
+          callId: callId.toString(),
+          recipient,
+          amount: amount.toString(),
+        },
+      });
+      await this.auditLogRepository.save(entry);
+    } catch (err) {
+      this.logger.warn(`Failed to audit PayoutWithdrawn: ${(err as Error).message}`);
+    }
+
+    this.eventEmitter.emit('payout.withdrawn', {
+      callId: callId.toString(),
+      recipient,
+      amount: amount.toString(),
+    });
   }
 
   async handleAdminParamsChanged(feePercent: bigint): Promise<void> {
@@ -396,11 +846,17 @@ export class IndexerService implements OnModuleInit {
 
     let settings = await this.settingsRepository.findOne({ where: { id: 1 } });
     if (!settings) {
-      settings = this.settingsRepository.create({ id: 1, feePercent: feeNum });
+      settings = this.settingsRepository.create({
+        id: 1,
+        feePercent: feeNum,
+        lastBlock: '0',
+        lastBlockHash: null,
+      } as unknown as PlatformSettings);
     } else {
       settings.feePercent = feeNum;
     }
 
+    if (!settings) return;
     await this.settingsRepository.save(settings);
     this.logger.log(`Platform settings updated: feePercent = ${feeNum}`);
   }
@@ -410,10 +866,11 @@ export class IndexerService implements OnModuleInit {
       where: { id: 1 },
     });
     if (!settings) {
-      // Return default if not populated yet
       return {
         id: 1,
         feePercent: 0,
+        lastBlock: '0',
+        lastBlockHash: null,
         updatedAt: new Date(),
       } as PlatformSettings;
     }
@@ -422,16 +879,6 @@ export class IndexerService implements OnModuleInit {
 
   // ─── Webhook ingestion (BE-32) ─────────────────────────────────────────────
 
-  /**
-   * Processes a signed webhook callback from an external indexer.
-   *
-   * Delegates to the same handlers used by the live ethers.js listener
-   * (`handleCallCreated`, `handleStakeAdded`, etc.), which already perform
-   * an idempotent upsert keyed by `callOnchainId` — reprocessing the same
-   * event (e.g. after a webhook retry) is a safe no-op. Every callback is
-   * recorded to the audit log regardless of outcome, and HmacSignatureGuard
-   * has already rejected replayed nonces before this method runs.
-   */
   async processWebhookEvent(
     dto: IndexerWebhookDto,
   ): Promise<{ processed: boolean; eventType: IndexerWebhookEventType }> {
@@ -553,21 +1000,7 @@ export class IndexerService implements OnModuleInit {
 
   // ─── IPFS fetching ─────────────────────────────────────────────────────────
 
-  /**
-   * Fetches JSON metadata from IPFS, trying multiple gateways in order.
-   *
-   * Each gateway attempt is individually retried with exponential backoff
-   * via withRetry(). If every gateway exhausts its attempts, the last
-   * RpcExhaustedError is re-thrown so the caller can decide how to degrade.
-   *
-   * Gateway priority:
-   *   1. Local proxy (avoids CORS, fastest in dev)
-   *   2. Pinata cloud
-   *   3. ipfs.io
-   *   4. dweb.link
-   */
   async fetchIpfsData(cid: string): Promise<Record<string, unknown>> {
-    // Stable mock — no network call needed in tests / local dev
     if (cid === 'QmMockCID') {
       return {
         title: 'ETH will flip BTC',
@@ -589,7 +1022,6 @@ export class IndexerService implements OnModuleInit {
 
     for (const url of gateways) {
       try {
-        // Each gateway gets its own retry budget: 3 attempts, 500 ms base
         const data = await withRetry(
           async () => {
             const response = await fetch(url, {
@@ -617,19 +1049,11 @@ export class IndexerService implements OnModuleInit {
       }
     }
 
-    // All gateways failed — throw so handleCallCreated can log and store empty metadata
     throw new RpcExhaustedError(`ipfs:${cid}`, gateways.length * 3, lastErr);
   }
 
   // ─── Live listener with auto-reconnect ────────────────────────────────────
 
-  /**
-   * Attaches ethers.js event listeners for real-time contract events.
-   *
-   * If the provider emits an 'error' event (dropped WebSocket, rate-limit, etc.)
-   * the listener tears itself down and schedules a reconnect with exponential
-   * backoff, up to LISTENER_MAX_RECONNECTS times.
-   */
   startListening(): void {
     this.logger.log(`Starting live listener on ${this.registryAddress}`);
 
@@ -690,6 +1114,31 @@ export class IndexerService implements OnModuleInit {
       },
     );
 
+    // BE-05: live listeners for new events
+    void contract.on(
+      'OutcomeSubmitted',
+      (callId: bigint, outcome: boolean, finalPrice: bigint, oracle: string) => {
+        void this.handleOutcomeSubmitted(callId, outcome, finalPrice, oracle).catch(
+          (err: Error) =>
+            this.logger.error(
+              `Error handling live OutcomeSubmitted: ${err.message}`,
+            ),
+        );
+      },
+    );
+
+    void contract.on(
+      'PayoutWithdrawn',
+      (callId: bigint, recipient: string, amount: bigint) => {
+        void this.handlePayoutWithdrawn(callId, recipient, amount).catch(
+          (err: Error) =>
+            this.logger.error(
+              `Error handling live PayoutWithdrawn: ${err.message}`,
+            ),
+        );
+      },
+    );
+
     void contract.on('AdminParamsChanged', (feePercent: bigint) => {
       void this.handleAdminParamsChanged(feePercent).catch((err: Error) =>
         this.logger.error(
@@ -698,7 +1147,6 @@ export class IndexerService implements OnModuleInit {
       );
     });
 
-    // Attach a provider-level error handler to detect dropped connections
     this.provider.on('error', (err: Error) => {
       this.logger.warn(`Provider error detected: ${err.message}`);
       void contract.removeAllListeners();
@@ -706,10 +1154,6 @@ export class IndexerService implements OnModuleInit {
     });
   }
 
-  /**
-   * Schedules a listener reconnect with exponential backoff.
-   * Gives up after LISTENER_MAX_RECONNECTS consecutive failures.
-   */
   private scheduleReconnect(): void {
     if (this.reconnectCount >= LISTENER_MAX_RECONNECTS) {
       this.logger.error(
@@ -721,7 +1165,7 @@ export class IndexerService implements OnModuleInit {
 
     const delay = Math.min(
       LISTENER_RECONNECT_DELAY_MS * Math.pow(2, this.reconnectCount),
-      300_000, // cap at 5 minutes
+      300_000,
     );
 
     this.reconnectCount++;
@@ -735,7 +1179,6 @@ export class IndexerService implements OnModuleInit {
       );
       try {
         this.startListening();
-        // Reset counter on successful reconnect
         this.reconnectCount = 0;
         this.logger.log('Live listener reconnected successfully');
       } catch (err) {
