@@ -12,6 +12,7 @@
 import * as React from 'react';
 import { useInfiniteQuery, type InfiniteData } from '@tanstack/react-query';
 import type { Call } from '../../lib/types';
+import { applyFeedPrefs, useFeedPrefs } from './useFeedPrefs';
 
 export type FeedTab = 'for-you' | 'following' | 'trending';
 
@@ -78,11 +79,20 @@ export function useFeed(tab: FeedTab, options: UseFeedOptions = {}): UseFeedResu
     enabled,
   });
 
+  // Personalization (FE-30): muted authors/tokens, chain filters and ranking
+  // weights are applied client-side to whatever the API returned.
+  const { prefs } = useFeedPrefs();
+
   // Flattened once per data change rather than on every render, since the
   // list feeds a memoised virtualiser downstream.
-  const calls = React.useMemo(
+  const flattened = React.useMemo(
     () => (query.data?.pages ?? []).flatMap((page) => page.items),
     [query.data],
+  );
+
+  const calls = React.useMemo(
+    () => applyFeedPrefs(flattened, prefs),
+    [flattened, prefs],
   );
 
   return {

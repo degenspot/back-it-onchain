@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { OracleService } from './oracle.service';
 import { Keypair } from '@stellar/stellar-sdk';
 import { AdminService } from '../admin/admin.service';
+import { AuditLog, AuditLogAction } from './audit-log.entity';
 
 describe('OracleService', () => {
   let service: OracleService;
@@ -23,14 +24,14 @@ describe('OracleService', () => {
         {
           provide: ConfigService,
           useValue: {
-            get: jest.fn((key: string) => {
+            get: jest.fn((key: string, def?: unknown) => {
               if (key === 'STELLAR_ORACLE_SECRET_KEY') {
                 return TEST_SECRET_KEY;
               }
               if (key === 'ORACLE_PRIVATE_KEY') {
                 return '0x1234567890123456789012345678901234567890123456789012345678901234';
               }
-              return null;
+              return def ?? null;
             }),
           },
         },
@@ -920,6 +921,341 @@ describe('OracleService', () => {
       // Prices should be the same if API is consistent
       expect(price1).toBe(price2);
       expect(price1).toBe(2000.5);
+    });
+  });
+
+  describe('ed25519 tweetnacl signing (BE-03)', () => {
+    it('buildStellarMessage encodes outcome as 0/1, not true/false', () => {
+      const yes = service.buildStellarMessage(42, true, 50000, 1700000000);
+      const no = service.buildStellarMessage(42, false, 50000, 1700000000);
+
+      expect(yes).toBe('BackIt:Outcome:42:1:50000:1700000000');
+      expect(no).toBe('BackIt:Outcome:42:0:50000:1700000000');
+    });
+
+    it('signEd25519 produces a verifiable 64-byte hex signature and 32-byte hex public key', () => {
+      const { signatureHex, publicKeyHex, message } = service.signEd25519(
+        42,
+        true,
+        50000,
+        1700000000,
+      );
+
+      expect(signatureHex).toHaveLength(128); // 64 bytes hex-encoded
+      expect(publicKeyHex).toHaveLength(64); // 32 bytes hex-encoded
+      expect(message).toBe(
+        service.buildStellarMessage(42, true, 50000, 1700000000),
+      );
+      expect(service.verifyEd25519(message, signatureHex, publicKeyHex)).toBe(
+        true,
+      );
+    });
+
+    it('signEd25519 public key matches the Stellar keypair raw public key', () => {
+      const { publicKeyHex } = service.signEd25519(1, true, 100, 1234567890);
+      const keypair = Keypair.fromSecret(TEST_SECRET_KEY);
+      expect(publicKeyHex).toBe(keypair.rawPublicKey().toString('hex'));
+    });
+
+    it('verifyEd25519 rejects a tampered message', () => {
+      const { signatureHex, publicKeyHex } = service.signEd25519(
+        1,
+        true,
+        100,
+        1234567890,
+      );
+      const tampered = service.buildStellarMessage(1, false, 100, 1234567890);
+      expect(service.verifyEd25519(tampered, signatureHex, publicKeyHex)).toBe(
+        false,
+      );
+    });
+
+    it('throws when the protocol is paused', async () => {
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          OracleService,
+          {
+            provide: ConfigService,
+            useValue: {
+              get: jest.fn((key: string) =>
+                key === 'STELLAR_ORACLE_SECRET_KEY' ? TEST_SECRET_KEY : null,
+              ),
+            },
+          },
+          {
+            provide: AdminService,
+            useValue: { isPaused: jest.fn(() => true) },
+          },
+        ],
+      }).compile();
+
+      const pausedService = module.get<OracleService>(OracleService);
+      expect(() => pausedService.signEd25519(1, true, 100, 1)).toThrow(
+        'Protocol is paused',
+      );
+    });
+  });
+
+  describe('EIP-712 signing via KMS abstraction (BE-02)', () => {
+    it('signEIP712 uses the configured ORACLE_CHAIN_ID (defaults to Base mainnet 8453)', async () => {
+      const signature = await service.signEIP712(1, true, 1000, 1700000000);
+      expect(signature).toMatch(/^0x[0-9a-fA-F]+$/);
+    });
+
+    it('rotateOracleKey swaps the local signer and returns its new address', async () => {
+      const before = await service.signEIP712(1, true, 1000, 1700000000);
+
+      const newKey =
+        '0xd0f6db54f2f19aa3dd6893c5b8ea6cd578722e750b253bc4d35de5ae60b52891';
+      const { address } = await service.rotateOracleKey(newKey);
+      expect(address).toMatch(/^0x[0-9a-fA-F]{40}$/);
+
+      const after = await service.signEIP712(1, true, 1000, 1700000000);
+      // Different key must produce a different signature over the same payload.
+      expect(after).not.toBe(before);
+    });
+
+    it('scalePrice applies ORACLE_PRICE_SCALE (default 1e18)', () => {
+      expect(service.scalePrice(1)).toBe('1000000000000000000');
+      expect(service.scalePrice(2.5)).toBe('2500000000000000000');
+    });
+  });
+
+  describe('Price fallback chain: DexScreener -> GeckoTerminal (BE-01)', () => {
+    let originalFetch: typeof global.fetch;
+
+    beforeEach(() => {
+      originalFetch = global.fetch;
+      (AbortSignal as any).timeout = () => new AbortController().signal;
+      (global as any).setTimeout = (cb: any) => {
+        cb();
+        return 0;
+      };
+    });
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+    });
+
+    it('uses DexScreener when it succeeds, never calling GeckoTerminal', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          pairs: [
+            {
+              priceUsd: '42.00',
+              baseToken: { symbol: 'TOK' },
+              volume: { h24: 1 },
+              liquidity: { usd: 1 },
+            },
+          ],
+        }),
+      });
+
+      const result = await service.fetchPriceWithFallback('0xtoken');
+      expect(result).toEqual({ price: 42, source: 'dexscreener' });
+      expect((global.fetch as jest.Mock).mock.calls.length).toBe(1);
+    });
+
+    it('falls back to GeckoTerminal when DexScreener is exhausted', async () => {
+      global.fetch = jest
+        .fn()
+        // 4 failed DexScreener attempts (maxAttempts default 4)
+        .mockRejectedValueOnce(new Error('down'))
+        .mockRejectedValueOnce(new Error('down'))
+        .mockRejectedValueOnce(new Error('down'))
+        .mockRejectedValueOnce(new Error('down'))
+        // GeckoTerminal succeeds
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            data: { attributes: { token_prices: { '0xtoken': '99.5' } } },
+          }),
+        });
+
+      const result = await service.fetchPriceWithFallback('0xtoken');
+      expect(result).toEqual({ price: 99.5, source: 'geckoterminal' });
+    });
+
+    it('throws PriceFeedOutageError when both feeds are exhausted', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('total outage'));
+
+      await expect(service.fetchPriceWithFallback('0xtoken')).rejects.toThrow(
+        /All price feeds exhausted/,
+      );
+    });
+  });
+
+  describe('resolveDueCalls (BE-01)', () => {
+    function buildDueCallServiceWithMocks(overrides: {
+      dueRows?: any[];
+      ipfsPin?: jest.Mock;
+    }) {
+      const savedRows: any[] = [];
+      const managerMock = {
+        query: jest.fn().mockResolvedValue(overrides.dueRows ?? []),
+        create: jest.fn((_entity: unknown, plain: unknown) => ({
+          ...(plain as object),
+        })),
+        save: jest.fn(async (_entity: unknown, entity: any) => {
+          savedRows.push({ ...entity });
+          return entity;
+        }),
+      };
+
+      const dataSourceMock = {
+        transaction: jest.fn(async (cb: (m: unknown) => Promise<void>) =>
+          cb(managerMock),
+        ),
+      };
+
+      const ipfsServiceMock = {
+        pin: overrides.ipfsPin ?? jest.fn().mockResolvedValue('QmTestCid'),
+      };
+
+      const eventEmitterMock = { emit: jest.fn() };
+      const auditLogRepoMock = {
+        save: jest.fn(),
+        create: jest.fn((x: unknown) => x),
+      };
+      const callRepoMock = {};
+
+      return {
+        managerMock,
+        dataSourceMock,
+        ipfsServiceMock,
+        eventEmitterMock,
+        auditLogRepoMock,
+        callRepoMock,
+        savedRows,
+      };
+    }
+
+    async function buildService(
+      mocks: ReturnType<typeof buildDueCallServiceWithMocks>,
+    ) {
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          OracleService,
+          {
+            provide: ConfigService,
+            useValue: {
+              get: jest.fn((key: string, def?: unknown) => {
+                if (key === 'STELLAR_ORACLE_SECRET_KEY') return TEST_SECRET_KEY;
+                if (key === 'ORACLE_PRIVATE_KEY') {
+                  return '0x1234567890123456789012345678901234567890123456789012345678901234';
+                }
+                if (key === 'ORACLE_PRICE_SCALE')
+                  return def ?? '1000000000000000000';
+                if (key === 'ORACLE_RESOLUTION_BATCH_SIZE') return def ?? 20;
+                return def ?? null;
+              }),
+            },
+          },
+          {
+            provide: AdminService,
+            useValue: { isPaused: jest.fn(() => false) },
+          },
+        ],
+      }).compile();
+
+      const svc = module.get<OracleService>(OracleService);
+      // Inject the remaining collaborators directly since they are optional
+      // constructor params not wired through this minimal testing module.
+      (svc as any).ipfsService = mocks.ipfsServiceMock;
+      (svc as any).eventEmitter = mocks.eventEmitterMock;
+      (svc as any).callRepository = mocks.callRepoMock;
+      (svc as any).auditLogRepository = mocks.auditLogRepoMock;
+      (svc as any).dataSource = mocks.dataSourceMock;
+      return svc;
+    }
+
+    beforeEach(() => {
+      (AbortSignal as any).timeout = () => new AbortController().signal;
+      (global as any).setTimeout = (cb: any) => {
+        cb();
+        return 0;
+      };
+    });
+
+    it('settles a due call: fetches price, pins evidence, signs, emits oracle.settlement', async () => {
+      const dueRow = {
+        id: 7,
+        status: 'OPEN',
+        tokenAddress: '0xtoken',
+        chain: 'base',
+        conditionJson: { direction: 'above', targetPrice: 10 },
+      };
+      const mocks = buildDueCallServiceWithMocks({ dueRows: [dueRow] });
+      const svc = await buildService(mocks);
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          pairs: [
+            {
+              priceUsd: '25',
+              baseToken: { symbol: 'TOK' },
+              volume: { h24: 1 },
+              liquidity: { usd: 1 },
+            },
+          ],
+        }),
+      });
+
+      const results = await svc.resolveDueCalls(5);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        callId: 7,
+        status: 'SETTLED',
+        outcome: true,
+        finalPrice: 25,
+      });
+      expect(mocks.ipfsServiceMock.pin).toHaveBeenCalled();
+      expect(mocks.eventEmitterMock.emit).toHaveBeenCalledWith(
+        'oracle.settlement',
+        expect.objectContaining({ callId: 7, outcome: true }),
+      );
+      expect(mocks.managerMock.query).toHaveBeenCalledWith(
+        expect.stringContaining('FOR UPDATE SKIP LOCKED'),
+        [5],
+      );
+    });
+
+    it('marks a call UNRESOLVED and notifies admins when both price feeds are down', async () => {
+      const dueRow = {
+        id: 9,
+        status: 'OPEN',
+        tokenAddress: '0xdead',
+        chain: 'base',
+        conditionJson: { direction: 'above', targetPrice: 10 },
+      };
+      const mocks = buildDueCallServiceWithMocks({ dueRows: [dueRow] });
+      const svc = await buildService(mocks);
+
+      global.fetch = jest.fn().mockRejectedValue(new Error('outage'));
+
+      const results = await svc.resolveDueCalls(5);
+
+      expect(results).toEqual([{ callId: 9, status: 'UNRESOLVED' }]);
+      expect(mocks.eventEmitterMock.emit).toHaveBeenCalledWith(
+        'oracle.unresolved',
+        expect.objectContaining({ callId: 9 }),
+      );
+      expect(mocks.managerMock.save).toHaveBeenCalledWith(
+        AuditLog,
+        expect.objectContaining({ action: AuditLogAction.ORACLE_UNRESOLVED }),
+      );
+    });
+
+    it('does nothing when no calls are due', async () => {
+      const mocks = buildDueCallServiceWithMocks({ dueRows: [] });
+      const svc = await buildService(mocks);
+
+      const results = await svc.resolveDueCalls(5);
+      expect(results).toEqual([]);
+      expect(mocks.eventEmitterMock.emit).not.toHaveBeenCalled();
     });
   });
 });

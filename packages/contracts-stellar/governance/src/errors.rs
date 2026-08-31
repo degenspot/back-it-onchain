@@ -99,4 +99,36 @@ pub enum ContractError {
     // ── Arithmetic Errors ─────────────────────────────────────────────────
     /// Arithmetic overflow detected.
     ArithmeticOverflow = 38,
+
+    // ── Binary Market View Errors (SC-002) ────────────────────────────────
+    /// Pools length is not exactly 2 for binary market view.
+    InvalidOutcomeCount = 39,
+
+    // ── Fee Configuration Errors (SC-017) ─────────────────────────────────
+    /// Fee bps outside the allowed range [50, 200] or invalid treasury.
+    InvalidFeeConfig = 40,
+    /// Weights vector length does not match recipients (SC-016).
+    InvalidWeights = 41,
+
+    // ── Ownership Errors (SC-090) ─────────────────────────────────────────
+    /// Owner has not been set — the contract is uninitialized.
+    OwnerNotSet = 42,
+    /// No in-flight ownership proposal to accept or cancel.
+    NoPendingOwner = 43,
+    /// The ownership transfer delay has not elapsed yet.
+    OwnershipTransferTooEarly = 44,
+    /// Proposed owner is invalid (e.g. identical to the current owner).
+    InvalidOwner = 45,
+    /// The contract this treasury mirrors its owner from is not configured.
+    OwnerSourceNotSet = 46,
+
+    // ── Liquidity Errors (SC-082 / SC-083) ──────────────────────────────────
+    /// Caller attempted to remove more shares than they hold.
+    InsufficientShares = 47,
+    /// No shares exist in the pool (cannot remove liquidity).
+    NoLiquidityShares = 48,
+    /// Liquidity token has not been configured on the treasury.
+    LiquidityTokenNotSet = 49,
+    /// Call registry has not been configured on the treasury.
+    CallRegistryNotSet = 50,
 }

@@ -3,7 +3,12 @@
 import { useState, useEffect } from 'react';
 import { CallCard } from './CallCard';
 import { CallCardSkeleton } from './CallCardSkeleton';
-import StakingModal from './StakingModal';
+import dynamic from 'next/dynamic';
+import { dynamicSkeleton } from '@/src/lib/perf'
+const StakingModal = dynamic(() => import('./StakingModal'), {
+  ssr: false,
+  loading: () => dynamicSkeleton({ loaderLabel: 'Loading staking...', minHeight: 96 }),
+});
 import RecommendedUsers from './RecommendedUsers';
 import { type Call } from '@/lib/types';
 
@@ -100,10 +105,10 @@ export function Feed() {
     return (
         <div className="space-y-4">
             {/* Tabs */}
-            <div className="flex gap-2 mb-4">
-                <button onClick={() => setTab('for-you')} className={`px-4 py-2 rounded-lg text-sm font-medium ${tab === 'for-you' ? 'bg-primary text-primary-foreground' : 'bg-secondary hover:bg-secondary/80'}`}>For You</button>
-                <button onClick={() => setTab('following')} className={`px-4 py-2 rounded-lg text-sm font-medium ${tab === 'following' ? 'bg-primary text-primary-foreground' : 'bg-secondary hover:bg-secondary/80'}`}>Following</button>
-                <button onClick={() => setTab('newest')} className={`px-4 py-2 rounded-lg text-sm font-medium ${tab === 'newest' ? 'bg-primary text-primary-foreground' : 'bg-secondary hover:bg-secondary/80'}`}>Newest</button>
+            <div role="tablist" aria-label="Calls feed" className="flex gap-2 mb-4">
+                <button role="tab" aria-selected={tab === 'for-you'} onClick={() => setTab('for-you')} className={`px-4 py-2 rounded-lg text-sm font-medium ${tab === 'for-you' ? 'bg-primary text-primary-foreground' : 'bg-secondary hover:bg-secondary/80'}`}>For You</button>
+                <button role="tab" aria-selected={tab === 'following'} onClick={() => setTab('following')} className={`px-4 py-2 rounded-lg text-sm font-medium ${tab === 'following' ? 'bg-primary text-primary-foreground' : 'bg-secondary hover:bg-secondary/80'}`}>Following</button>
+                <button role="tab" aria-selected={tab === 'newest'} onClick={() => setTab('newest')} className={`px-4 py-2 rounded-lg text-sm font-medium ${tab === 'newest' ? 'bg-primary text-primary-foreground' : 'bg-secondary hover:bg-secondary/80'}`}>Newest</button>
             </div>
 
             {/* Chain Filter Buttons */}
@@ -163,7 +168,7 @@ export function Feed() {
                     list = list.sort((a,b) => (new Date(b.createdAt || '').getTime() || 0) - (new Date(a.createdAt || '').getTime() || 0));
                 } else {
                     // for-you: simple algorithmic sort: prioritize base chain
-                    list = list.sort((a, _b) => (a.chain === 'base' ? -1 : 1));
+                    list = list.sort((a, b) => (a.chain === 'base' ? -1 : (b.chain === 'base' ? 1 : 0)));
                 }
 
                 if (tab === 'following' && list.length === 0) {

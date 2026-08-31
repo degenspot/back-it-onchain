@@ -1,5 +1,5 @@
 #![no_std]
-use governance::errors::ContractError;
+
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, Address, Bytes, BytesN, Env, Map,
     Symbol, Vec,
