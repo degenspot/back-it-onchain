@@ -18,6 +18,30 @@ export interface QueuedDraft {
 
 const QUEUE_KEY = 'offline-draft-queue';
 
+const SW_PATH = '/sw.js';
+
+export function isServiceWorkerSupported(): boolean {
+  return typeof window !== 'undefined' && 'serviceWorker' in window.navigator;
+}
+
+/**
+ * Registers the app shell / feed-cache service worker (FE-31).
+ *
+ * Service workers are only available on https (localhost counts), so the
+ * guard keeps dev-over-LAN and http previews from throwing.
+ */
+export async function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
+  if (!isServiceWorkerSupported()) return null;
+  try {
+    return await window.navigator.serviceWorker.register(SW_PATH, { scope: '/' });
+  } catch (error) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.debug('[pwa] service worker registration failed', error);
+    }
+    return null;
+  }
+}
+
 export function readDraftQueue(): QueuedDraft[] {
   if (typeof window === 'undefined') return [];
   try {

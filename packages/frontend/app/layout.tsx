@@ -8,6 +8,13 @@ import '@coinbase/onchainkit/styles.css';
 export const metadata: Metadata = {
   title: "Back It (Onchain)",
   description: "Prediction market on Base",
+  manifest: "/manifest.json",
+  themeColor: "#8b5cf6",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "BackIt",
+  },
 };
 
 export default function RootLayout({
