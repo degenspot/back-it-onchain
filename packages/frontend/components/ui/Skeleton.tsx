@@ -1,6 +1,6 @@
 import { cn } from '@/lib/utils';
 
-export interface SkeletonProps extends React.HTMLAttributes<HTMLDivElement> {}
+export type SkeletonProps = React.HTMLAttributes<HTMLDivElement>;
 
 /**
  * Base skeleton primitive (FE-25). All loading placeholders reuse this so
