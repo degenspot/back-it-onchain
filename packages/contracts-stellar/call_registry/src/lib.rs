@@ -659,7 +659,9 @@ impl CallRegistry {
 
     /// Non-panicking view of a pending token proposal (issue #322/#323).
     pub fn get_proposal(env: Env, token: Address) -> Option<TokenProposal> {
-        env.storage().persistent().get(&DataKey::TokenProposal(token))
+        env.storage()
+            .persistent()
+            .get(&DataKey::TokenProposal(token))
     }
 
     /// Whether a pending proposal for `token` has expired past the 7-day window.
@@ -669,11 +671,7 @@ impl CallRegistry {
             .persistent()
             .get::<DataKey, TokenProposal>(&DataKey::TokenProposal(token))
         {
-            Some(p) => env
-                .ledger()
-                .timestamp()
-                .saturating_sub(p.created_at)
-                > PROPOSAL_EXPIRY_SECS,
+            Some(p) => env.ledger().timestamp().saturating_sub(p.created_at) > PROPOSAL_EXPIRY_SECS,
             None => false,
         }
     }
