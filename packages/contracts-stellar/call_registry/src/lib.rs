@@ -227,22 +227,6 @@ impl CallRegistry {
             .unwrap_or(false)
     }
 
-    /// True if `user` has already staked on this call on ANY outcome index
-    /// (used to deduplicate `participant_count`, issue #320).
-    fn user_has_stake_in_call(env: &Env, call: &Call, call_id: u64, user: &Address) -> bool {
-        for i in 0..call.outcome_pools.len() {
-            let stake: i128 = env
-                .storage()
-                .persistent()
-                .get(&DataKey::UserStake(call_id, user.clone(), i as u32))
-                .unwrap_or(0);
-            if stake > 0 {
-                return true;
-            }
-        }
-        false
-    }
-
     // ── Vault helpers ─────────────────────────────────────────────────────────
 
     fn vault_contract(env: &Env) -> Option<Address> {
@@ -911,8 +895,6 @@ impl CallRegistry {
             .expect("Arithmetic overflow");
         // Participant count is gated on the user's first stake anywhere on the
         // call, so re-staking another outcome doesn't inflate the surge fee.
-        if !Self::user_has_stake_in_call(&env, &call, call_id, &staker) {
-            call.participant_count += 1;
         if is_new_participant {
             call.participant_count = call
                 .participant_count
