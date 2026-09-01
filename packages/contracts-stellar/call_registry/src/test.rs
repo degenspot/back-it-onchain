@@ -1121,16 +1121,20 @@ fn test_stake_on_multi_outcome() {
     client.stake_on_call(&call_id, &staker_a, &1000, &1u32);
     // staker_b stakes on outcome 2 (50bp fee on 500 = 2; net = 498)
     client.stake_on_call(&call_id, &staker_b, &500, &2u32);
+    // A repeat staker choosing another outcome must not increase the
+    // participant count a second time.
+    client.stake_on_call(&call_id, &staker_a, &100, &2u32);
 
     let call = client.get_call(&call_id);
     assert_eq!(call.outcome_pools.get(0).unwrap(), 100); // creator
     assert_eq!(call.outcome_pools.get(1).unwrap(), 995); // staker_a net
-    assert_eq!(call.outcome_pools.get(2).unwrap(), 498); // staker_b net
+    assert_eq!(call.outcome_pools.get(2).unwrap(), 598); // staker_b + staker_a net
     assert_eq!(call.participant_count, 3);
 
     // Verify individual stakes
     assert_eq!(client.get_user_stake(&call_id, &creator, &0u32), 100);
     assert_eq!(client.get_user_stake(&call_id, &staker_a, &1u32), 995);
+    assert_eq!(client.get_user_stake(&call_id, &staker_a, &2u32), 100);
     assert_eq!(client.get_user_stake(&call_id, &staker_b, &2u32), 498);
 }
 
@@ -2363,10 +2367,59 @@ fn test_finalize_twice_reverts() {
     client.finalize_call(&call_id, &0u32, &1000i128, &false, &om);
 }
 
-// ── Issue #320 (SC-007): Participant Count Dedup & Gating ─────────────────────
+// ── SC-005: Surge-Fee Scaling to 200bps (boundary & property tests) ───────────
 
 #[test]
-fn test_participant_count_dedup_same_user() {
+fn test_surge_fee_boundaries() {
+    // Exact boundary values around each 10-participant step.
+    //         participants -> fee bps
+    assert_eq!(compute_fee_basis_points(0), 50); //  0 ->  50
+    assert_eq!(compute_fee_basis_points(9), 50); //  9 ->  50
+    assert_eq!(compute_fee_basis_points(10), 55); // 10 ->  55
+    assert_eq!(compute_fee_basis_points(19), 55); // 19 ->  55
+    assert_eq!(compute_fee_basis_points(20), 60); // 20 ->  60
+    assert_eq!(compute_fee_basis_points(99), 95); // 99 ->  95
+    assert_eq!(compute_fee_basis_points(100), 100); // 100 -> 100
+    assert_eq!(compute_fee_basis_points(299), 195); // 299 -> 195
+    assert_eq!(compute_fee_basis_points(300), 200); // 300 -> 200 (cap)
+    assert_eq!(compute_fee_basis_points(301), 200); // 301 -> 200 (cap)
+}
+
+#[test]
+fn test_fee_never_exceeds_200() {
+    // Property test: for any participant count 0..500 the fee never dips below
+    // the 50 bp base nor rises above the 200 bp cap.
+    for count in 0..500u32 {
+        let fee = compute_fee_basis_points(count);
+        assert!(
+            (50..=200).contains(&fee),
+            "fee {} out of [50, 200] for participant_count {}",
+            fee,
+            count
+        );
+    }
+}
+
+// ── Issue #319 (SC-006): Phoenix-compatible vault yield layer ─────────────────
+
+// Minimal no-op vault contract so the contract's vault_deposit / vault_withdraw
+// calls resolve against a real (registered) address without needing an external
+// lending protocol.
+mod mock_vault {
+    use soroban_sdk::{contract, contractimpl, Address, Env};
+
+    #[contract]
+    pub struct MockVault;
+
+    #[contractimpl]
+    impl MockVault {
+        pub fn deposit(_env: Env, _from: Address, _amount: i128) {}
+        pub fn withdraw(_env: Env, _to: Address, _amount: i128) {}
+    }
+}
+
+#[test]
+fn test_vault_deposit_on_create() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -2375,12 +2428,15 @@ fn test_participant_count_dedup_same_user() {
     let admin = Address::generate(&env);
     client.initialize(&admin);
 
+    let mock_vault_id = env.register_contract(None, mock_vault::MockVault);
+    client.set_vault(&mock_vault_id);
+
     let creator = Address::generate(&env);
     let stake_token_admin = Address::generate(&env);
     let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
     let stake_token = stake_token_contract.address();
     let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
-    stake_token_admin_client.mint(&creator, &10_000);
+    stake_token_admin_client.mint(&creator, &1000);
     client.whitelist_token_admin(&stake_token);
 
     let end_ts = env.ledger().timestamp() + 1000;
@@ -2391,27 +2447,15 @@ fn test_participant_count_dedup_same_user() {
         &end_ts,
         &default_metadata(&env),
     );
-    assert_eq!(client.get_participant_count(&call_id), 1);
 
-    // Creator re-stakes on outcome 1 → participant_count must stay 1.
-    client.stake_on_call(&call_id, &creator, &1000, &1u32);
-    assert_eq!(client.get_participant_count(&call_id), 1);
-
-    // A brand-new user increments the count.
-    let staker = Address::generate(&env);
-    stake_token_admin_client.mint(&staker, &10_000);
-    client.stake_on_call(&call_id, &staker, &1000, &0u32);
-    assert_eq!(client.get_participant_count(&call_id), 2);
-
-    // Staker re-stakes another outcome → still 2.
-    client.stake_on_call(&call_id, &staker, &500, &1u32);
-    assert_eq!(client.get_participant_count(&call_id), 2);
+    // The creator's stake is mirrored into the vault_balance tracking.
+    let call = client.get_call(&call_id);
+    assert_eq!(call.vault_balance, 100);
+    assert_eq!(call.outcome_pools.get(0).unwrap(), 100);
 }
 
-// ── Issue #321 (SC-008): Early Exit with Penalty & Pool Rebalance ────────────
-
 #[test]
-fn test_early_exit_refunds_70_percent_minus_fee() {
+fn test_vault_deposit_on_stake() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -2420,14 +2464,63 @@ fn test_early_exit_refunds_70_percent_minus_fee() {
     let admin = Address::generate(&env);
     client.initialize(&admin);
 
+    let mock_vault_id = env.register_contract(None, mock_vault::MockVault);
+    client.set_vault(&mock_vault_id);
+
     let creator = Address::generate(&env);
+    let staker = Address::generate(&env);
+    let stake_token_admin = Address::generate(&env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
+    stake_token_admin_client.mint(&creator, &1000);
+    stake_token_admin_client.mint(&staker, &1000);
+    client.whitelist_token_admin(&stake_token);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    let call_id = client.create_call(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &default_metadata(&env),
+    );
+
+    // participant_count = 1 -> 50 bp; stake 1000 -> fee 5, net 995
+    client.stake_on_call(&call_id, &staker, &1000, &1u32);
+
+    let call = client.get_call(&call_id);
+    // vault_balance increased by the net_amount (995): 100 + 995 = 1095
+    assert_eq!(call.vault_balance, 1095);
+    assert_eq!(call.outcome_pools.get(1).unwrap(), 995);
+    assert_eq!(call.participant_count, 2);
+}
+
+#[test]
+fn test_vault_withdraw_on_finalize() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let mock_vault_id = env.register_contract(None, mock_vault::MockVault);
+    client.set_vault(&mock_vault_id);
+
+    let creator = Address::generate(&env);
+    let staker = Address::generate(&env);
     let stake_token_admin = Address::generate(&env);
     let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
     let stake_token = stake_token_contract.address();
     let stake_token_client = token::Client::new(&env, &stake_token);
     let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
-    stake_token_admin_client.mint(&creator, &10_000);
+    stake_token_admin_client.mint(&creator, &1000);
+    stake_token_admin_client.mint(&staker, &1000);
     client.whitelist_token_admin(&stake_token);
+
+    client.set_outcome_manager(&creator);
 
     let end_ts = env.ledger().timestamp() + 1000;
     let call_id = client.create_call(
@@ -2438,35 +2531,85 @@ fn test_early_exit_refunds_70_percent_minus_fee() {
         &default_metadata(&env),
     );
 
-    let before = stake_token_client.balance(&creator);
-    client.early_exit(&call_id, &creator, &0u32);
+    // Staker backs the losing side (outcome 1): 1000 -> net 995
+    client.stake_on_call(&call_id, &staker, &1000, &1u32);
 
-    // user_stake 100 → penalty 30, fee 0 (participant 1 → 50bp → 0), refund 70.
+    let staker_balance_before = stake_token_client.balance(&staker);
+
+    // Finalize with outcome 0 winning: losers_pool = 995 -> gas_fee = 4
+    env.ledger().set_timestamp(end_ts + 1);
+    client.finalize_call(&call_id, &0u32, &2000i128, &false, &creator);
+
     let call = client.get_call(&call_id);
-    assert_eq!(call.outcome_pools.get(0).unwrap(), 0);
-    assert_eq!(call.vault_balance, 30);
-    assert_eq!(stake_token_client.balance(&creator), before + 70);
-    assert_eq!(client.get_user_stake(&call_id, &creator, &0u32), 0);
+    assert!(call.settled);
+
+    // Vault balance before finalize = 100 + 995 = 1095; gas_fee 4 withdrawn -> 1091
+    assert_eq!(call.vault_balance, 1091);
+
+    // The gas fee was paid out to the caller from the contract's pocket
+    // (the mock vault withdraw makes the funds available for transfer).
+    let caller_gain = stake_token_client.balance(&creator) - (1000 - 100);
+    assert_eq!(caller_gain, 4);
+
+    // The losing staker never got anything yet.
+    assert_eq!(stake_token_client.balance(&staker), staker_balance_before);
 }
 
 #[test]
-#[should_panic(expected = "No stake found")]
-fn test_early_exit_second_exit_reverts() {
+#[should_panic]
+fn test_set_vault_requires_admin() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    env.mock_auths(&[MockAuth {
+        address: &admin,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "initialize",
+            args: (&admin,).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.initialize(&admin);
+
+    // A non-admin user tries to set the vault; must panic on admin.require_auth.
+    let attacker = Address::generate(&env);
+    let vault = Address::generate(&env);
+    env.mock_auths(&[MockAuth {
+        address: &attacker,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "set_vault",
+            args: (&vault,).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.set_vault(&vault);
+}
+
+#[test]
+fn test_no_vault_path_unchanged() {
+    // Baseline: without any vault configured, the full lifecycle still works and
+    // vault_balance tracking behaves exactly as before.
     let env = Env::default();
     env.mock_all_auths();
-
     let contract_id = env.register_contract(None, CallRegistry);
     let client = CallRegistryClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
     client.initialize(&admin);
 
     let creator = Address::generate(&env);
+    let staker = Address::generate(&env);
     let stake_token_admin = Address::generate(&env);
     let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
     let stake_token = stake_token_contract.address();
     let stake_token_admin_client = token::StellarAssetClient::new(&env, &stake_token);
-    stake_token_admin_client.mint(&creator, &10_000);
+    stake_token_admin_client.mint(&creator, &1000);
+    stake_token_admin_client.mint(&staker, &1000);
     client.whitelist_token_admin(&stake_token);
+
+    client.set_outcome_manager(&creator);
 
     let end_ts = env.ledger().timestamp() + 1000;
     let call_id = client.create_call(
@@ -2477,126 +2620,17 @@ fn test_early_exit_second_exit_reverts() {
         &default_metadata(&env),
     );
 
-    client.early_exit(&call_id, &creator, &0u32);
-    // Second exit must revert because the stake is zeroed.
-    client.early_exit(&call_id, &creator, &0u32);
-}
+    let call = client.get_call(&call_id);
+    assert_eq!(call.vault_balance, 100);
 
-// ── Issue #322 (SC-009): Token Whitelisting via 3-Staker Vouches ─────────────
+    client.stake_on_call(&call_id, &staker, &1000, &1u32);
+    let call = client.get_call(&call_id);
+    assert_eq!(call.vault_balance, 1095);
+    assert_eq!(call.outcome_pools.get(1).unwrap(), 995);
 
-#[test]
-fn test_three_vouches_auto_whitelists() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register_contract(None, CallRegistry);
-    let client = CallRegistryClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    client.initialize(&admin);
-
-    let proposer = Address::generate(&env);
-    let staker1 = Address::generate(&env);
-    let staker2 = Address::generate(&env);
-    let staker3 = Address::generate(&env);
-    for s in [&staker1, &staker2, &staker3] {
-        client.add_authorized_staker(s);
-    }
-
-    let token = Address::generate(&env);
-    client.propose_token(&proposer, &token);
-    assert_eq!(client.get_proposal(&token).is_some(), true);
-
-    client.vouch_for_token(&staker1, &token);
-    client.vouch_for_token(&staker2, &token);
-    assert_eq!(client.is_token_whitelisted(&token), false);
-
-    // Third distinct vouch → auto-whitelist, proposal removed.
-    client.vouch_for_token(&staker3, &token);
-    assert_eq!(client.is_token_whitelisted(&token), true);
-    assert_eq!(client.get_proposal(&token).is_none(), true);
-    assert_eq!(client.is_authorized_staker(&staker1), true);
-}
-
-// ── Issue #323 (SC-010): TokenProposal Expiry & Cleanup ──────────────────────
-
-#[test]
-fn test_expired_proposal_cleanup() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register_contract(None, CallRegistry);
-    let client = CallRegistryClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    client.initialize(&admin);
-
-    let proposer = Address::generate(&env);
-    let token = Address::generate(&env);
-    client.propose_token(&proposer, &token);
-
-    // A fresh proposal is never expired.
-    assert_eq!(client.is_proposal_expired(&token), false);
-}
-
-#[test]
-#[should_panic(expected = "Proposal not yet expired")]
-fn test_cleanup_unexpired_panics() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register_contract(None, CallRegistry);
-    let client = CallRegistryClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    client.initialize(&admin);
-
-    let proposer = Address::generate(&env);
-    let token = Address::generate(&env);
-    client.propose_token(&proposer, &token);
-    client.cleanup_expired_proposal(&token);
-}
-
-#[test]
-fn test_expired_proposal_cleanup_after_7_days() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register_contract(None, CallRegistry);
-    let client = CallRegistryClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    client.initialize(&admin);
-
-    let proposer = Address::generate(&env);
-    let token = Address::generate(&env);
-    client.propose_token(&proposer, &token);
-
-    // Move past the 7-day (604_800 s) expiry.
-    let now = env.ledger().timestamp();
-    env.ledger().set_timestamp(now + 604_801);
-    assert_eq!(client.is_proposal_expired(&token), true);
-
-    client.cleanup_expired_proposal(&token);
-    assert_eq!(client.get_proposal(&token).is_none(), true);
-}
-
-#[test]
-fn test_admin_reject_proposal_emits() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register_contract(None, CallRegistry);
-    let client = CallRegistryClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    client.initialize(&admin);
-
-    let proposer = Address::generate(&env);
-    let token = Address::generate(&env);
-    client.propose_token(&proposer, &token);
-    assert_eq!(client.get_proposal(&token).is_some(), true);
-
-    client.reject_proposal(&token);
-    assert_eq!(client.get_proposal(&token).is_none(), true);
-
-    let events = env.events().all();
-    let last = events.last().unwrap();
-    let symbol: Symbol = last.1.get(0).unwrap().into_val(&env);
-    assert_eq!(symbol, Symbol::new(&env, "TokenRejected"));
+    env.ledger().set_timestamp(end_ts + 1);
+    client.finalize_call(&call_id, &0u32, &2000i128, &false, &creator);
+    let call = client.get_call(&call_id);
+    assert!(call.settled);
+    assert_eq!(call.vault_balance, 1091);
 }

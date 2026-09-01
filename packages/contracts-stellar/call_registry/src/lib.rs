@@ -860,6 +860,17 @@ impl CallRegistry {
             panic!("Invalid outcome index");
         }
 
+        // Count an address once per call, even when it stakes on multiple
+        // outcomes. The check must happen before writing the new stake.
+        let is_new_participant = (0..call.outcome_pools.len()).all(|index| {
+            let stake_key = DataKey::UserStake(call_id, staker.clone(), index);
+            env.storage()
+                .persistent()
+                .get::<DataKey, i128>(&stake_key)
+                .unwrap_or(0)
+                == 0
+        });
+
         // Transfer full amount from staker to contract (SAC escrow with
         // balance-delta guard: fee-on-transfer tokens may deliver less than
         // `amount`, so the delta received drives fee + pool bookkeeping).
@@ -902,6 +913,11 @@ impl CallRegistry {
         // call, so re-staking another outcome doesn't inflate the surge fee.
         if !Self::user_has_stake_in_call(&env, &call, call_id, &staker) {
             call.participant_count += 1;
+        if is_new_participant {
+            call.participant_count = call
+                .participant_count
+                .checked_add(1)
+                .expect("Participant count overflow");
         }
         env.storage().persistent().set(&key, &call);
         // Bump TTL on every stake interaction (issue #169)
