@@ -1,6 +1,6 @@
 //! Treasury contract.
 //!
-//! Two responsibilities today:
+//! Three responsibilities today:
 //!
 //! * **Ownership mirror (SC-090)** — a two-step `propose_owner` / `accept_owner`
 //!   transfer that reuses `governance::ownership`, plus `sync_owner` to pull the
@@ -9,6 +9,9 @@
 //!   configuration, dividend dust and fee accrual. The authoritative `FeeConfig`
 //!   and `PlatformFees` state lives in `call_registry`; these helpers exist so
 //!   the maths can be reviewed and unit-tested independently of the host.
+//! * **Vault balance sync (SC-085)** — permissionless `sync_vault_balance`
+//!   pulls `vault_balance` from the call registry via cross-contract call and
+//!   caches it for analytics; `get_synced_vault` reads the cache.
 
 use governance::errors::ContractError;
 use governance::ownership;
@@ -52,6 +55,37 @@ mod owner_iface {
     }
 }
 
+// Cross-contract call registry interface (SC-085).
+mod call_registry_iface {
+    use soroban_sdk::{contractclient, contracttype, Address, BytesN, Env, String};
+
+    /// Full mirror of `call_registry::Call` — must match field-for-field so
+    /// cross-contract deserialization succeeds.
+    #[contracttype]
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct Call {
+        pub creator: Address,
+        pub stake_token: Address,
+        pub outcome_pools: soroban_sdk::Vec<i128>,
+        pub start_ts: u64,
+        pub end_ts: u64,
+        pub token_address: Address,
+        pub pair_id: BytesN<32>,
+        pub ipfs_cid: String,
+        pub settled: bool,
+        pub winning_outcome: u32,
+        pub final_price: i128,
+        pub vault_balance: i128,
+        pub participant_count: u32,
+    }
+
+    #[allow(dead_code)]
+    #[contractclient(name = "CallRegistryClient")]
+    pub trait CallRegistry {
+        fn get_call(env: Env, call_id: u64) -> Call;
+    }
+}
+
 // ── Data types ───────────────────────────────────────────────────────────────
 
 /// Treasury-owned instance keys.
@@ -71,6 +105,8 @@ pub enum DataKey {
     LiquidityToken,
     /// Call registry credited with the staker dividend share (SC-084).
     CallRegistry,
+    /// Cached vault_balance synced from the call registry (SC-085).
+    SyncedVaultBalance(u64),
 }
 
 pub(crate) fn bump_persistent_ttl(env: &Env, key: &Symbol) {
@@ -298,6 +334,49 @@ impl Treasury {
     /// Read the configured call registry address.
     pub fn get_call_registry(env: Env) -> Address {
         get_call_registry_address(&env)
+    }
+
+    // ── Vault balance sync (SC-085) ──────────────────────────────────────────
+
+    /// Pull `vault_balance` from the call registry for `call_id` and cache it
+    /// in persistent storage for analytics.
+    ///
+    /// Permissionless — anyone may trigger a sync; the registry is the single
+    /// source of truth and the cached value is purely advisory (read-only).
+    ///
+    /// Reverts when the call registry does not contain `call_id` (propagates
+    /// the registry's `Call does not exist` panic). Reverts with
+    /// `CallRegistryNotSet` if the treasury has no registry configured.
+    ///
+    /// Emits `VaultBalanceSynced` with the new cached value.
+    pub fn sync_vault_balance(env: Env, call_id: u64) -> i128 {
+        let registry_addr = get_call_registry_address(&env);
+        let registry_client = call_registry_iface::CallRegistryClient::new(&env, &registry_addr);
+        let call = registry_client.get_call(&call_id);
+
+        let vault_balance = call.vault_balance;
+
+        let key = DataKey::SyncedVaultBalance(call_id);
+        env.storage().persistent().set(&key, &vault_balance);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, LEDGERS_PER_YEAR);
+
+        env.events().publish(
+            (Symbol::new(&env, "VaultBalanceSynced"), call_id),
+            vault_balance,
+        );
+
+        vault_balance
+    }
+
+    /// Read the cached vault balance for `call_id`.
+    ///
+    /// Returns `None` if `sync_vault_balance` has never been called for this
+    /// `call_id`.
+    pub fn get_synced_vault(env: Env, call_id: u64) -> Option<i128> {
+        let key = DataKey::SyncedVaultBalance(call_id);
+        env.storage().persistent().get(&key)
     }
 
     // ── Liquidity (SC-082 / SC-083 / SC-086) ─────────────────────────────────

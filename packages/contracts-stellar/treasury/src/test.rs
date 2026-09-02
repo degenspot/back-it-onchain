@@ -3,7 +3,7 @@
 use crate::treasury::*;
 use governance::ownership::TRANSFER_DELAY;
 use soroban_sdk::{
-    contract, contractimpl, symbol_short,
+    contract, contractimpl, contracttype, symbol_short,
     testutils::{Address as _, Ledger},
     Address, Env,
 };
@@ -549,4 +549,196 @@ fn test_split_fee_amounts_sc084() {
     assert_eq!(split_fee_amounts(1), Some((0, 1)));
     assert_eq!(split_fee_amounts(0), None);
     assert_eq!(split_fee_amounts(-1), None);
+}
+
+// ── Vault balance sync (SC-085) ──────────────────────────────────────────────
+//
+// Mock call registry that stores Call entries and exposes `get_call(call_id)`
+// for the treasury's cross-contract sync.
+
+use soroban_sdk::{BytesN, String as SorobanString};
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MockCall {
+    pub creator: Address,
+    pub stake_token: Address,
+    pub outcome_pools: soroban_sdk::Vec<i128>,
+    pub start_ts: u64,
+    pub end_ts: u64,
+    pub token_address: Address,
+    pub pair_id: BytesN<32>,
+    pub ipfs_cid: SorobanString,
+    pub settled: bool,
+    pub winning_outcome: u32,
+    pub final_price: i128,
+    pub vault_balance: i128,
+    pub participant_count: u32,
+}
+
+#[contract]
+pub struct MockCallRegistry;
+
+#[contractimpl]
+impl MockCallRegistry {
+    pub fn set_call(env: Env, call_id: u64, vault_balance: i128) {
+        let call = MockCall {
+            creator: Address::generate(&env),
+            stake_token: Address::generate(&env),
+            outcome_pools: soroban_sdk::Vec::new(&env),
+            start_ts: 0,
+            end_ts: 0,
+            token_address: Address::generate(&env),
+            pair_id: BytesN::from_array(&env, &[0u8; 32]),
+            ipfs_cid: SorobanString::from_str(&env, ""),
+            settled: false,
+            winning_outcome: 0,
+            final_price: 0,
+            vault_balance,
+            participant_count: 0,
+        };
+        env.storage().persistent().set(&call_id, &call);
+    }
+
+    pub fn get_call(env: Env, call_id: u64) -> MockCall {
+        env.storage()
+            .persistent()
+            .get(&call_id)
+            .expect("Call does not exist")
+    }
+}
+
+/// Convenience: set up a treasury with a mock call registry wired as the
+/// `CallRegistry` data key so `sync_vault_balance` can cross-contract call it.
+fn setup_with_registry(
+    env: &Env,
+) -> (
+    TreasuryClient<'_>,
+    MockOwnerSourceClient<'_>,
+    Address,
+    Address,
+) {
+    let owner = Address::generate(env);
+
+    let source_id = env.register_contract(None, MockOwnerSource);
+    let source = MockOwnerSourceClient::new(env, &source_id);
+    source.init(&owner);
+
+    let registry_id = env.register_contract(None, MockCallRegistry);
+
+    let treasury_id = env.register_contract(None, Treasury);
+    let treasury = TreasuryClient::new(env, &treasury_id);
+    treasury.initialize(&owner, &source_id);
+
+    // Wire the registry address so get_call_registry_address() works.
+    treasury.set_call_registry(&owner, &registry_id);
+
+    (treasury, source, owner, registry_id)
+}
+
+#[test]
+fn test_sync_vault_balance_caches_from_registry() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury, _, _, registry_id) = setup_with_registry(&env);
+    let registry = MockCallRegistryClient::new(&env, &registry_id);
+
+    // Seed the registry with a call whose vault_balance is 500.
+    registry.set_call(&1, &500);
+
+    // Before sync: cached value is None.
+    assert_eq!(treasury.get_synced_vault(&1), None);
+
+    // Sync pulls 500 from the registry and caches it.
+    let synced = treasury.sync_vault_balance(&1);
+    assert_eq!(synced, 500);
+    assert_eq!(treasury.get_synced_vault(&1), Some(500));
+}
+
+#[test]
+fn test_sync_vault_balance_reflects_updated_registry() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury, _, _, registry_id) = setup_with_registry(&env);
+    let registry = MockCallRegistryClient::new(&env, &registry_id);
+
+    registry.set_call(&1, &100);
+    treasury.sync_vault_balance(&1);
+    assert_eq!(treasury.get_synced_vault(&1), Some(100));
+
+    // Registry vault_balance increases (e.g. after a stake).
+    registry.set_call(&1, &250);
+    treasury.sync_vault_balance(&1);
+    assert_eq!(treasury.get_synced_vault(&1), Some(250));
+}
+
+#[test]
+fn test_sync_vault_balance_is_permissionless() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury, _, _, registry_id) = setup_with_registry(&env);
+    let registry = MockCallRegistryClient::new(&env, &registry_id);
+
+    registry.set_call(&42, &999);
+
+    // No caller auth required — anyone can trigger sync.
+    let synced = treasury.sync_vault_balance(&42);
+    assert_eq!(synced, 999);
+}
+
+#[test]
+#[should_panic(expected = "Call does not exist")]
+fn test_sync_vault_balance_reverts_for_missing_call() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury, _, _, _) = setup_with_registry(&env);
+
+    // call_id 999 was never seeded → registry.get_call reverts → propagated.
+    treasury.sync_vault_balance(&999);
+}
+
+#[test]
+fn test_get_synced_vault_returns_none_before_sync() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury, _, _, _) = setup_with_registry(&env);
+
+    assert_eq!(treasury.get_synced_vault(&1), None);
+    assert_eq!(treasury.get_synced_vault(&999), None);
+}
+
+#[test]
+fn test_sync_vault_balance_is_idempotent() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury, _, _, registry_id) = setup_with_registry(&env);
+    let registry = MockCallRegistryClient::new(&env, &registry_id);
+
+    registry.set_call(&1, &777);
+
+    assert_eq!(treasury.sync_vault_balance(&1), 777);
+    assert_eq!(treasury.sync_vault_balance(&1), 777);
+    assert_eq!(treasury.get_synced_vault(&1), Some(777));
+}
+
+#[test]
+fn test_sync_vault_balance_zero_is_cached() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury, _, _, registry_id) = setup_with_registry(&env);
+    let registry = MockCallRegistryClient::new(&env, &registry_id);
+
+    // A call with vault_balance 0 (e.g. fully withdrawn) is still valid.
+    registry.set_call(&1, &0);
+
+    let synced = treasury.sync_vault_balance(&1);
+    assert_eq!(synced, 0);
+    assert_eq!(treasury.get_synced_vault(&1), Some(0));
 }
