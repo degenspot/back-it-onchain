@@ -157,7 +157,7 @@ fn test_stake_on_call() {
 }
 
 #[test]
-#[should_panic(expected = "End time must be in future")]
+#[should_panic(expected = "InvalidEndTime")]
 fn test_create_call_past_end_time() {
     let env = Env::default();
     env.mock_all_auths();
@@ -180,7 +180,7 @@ fn test_create_call_past_end_time() {
 }
 
 #[test]
-#[should_panic(expected = "Call ended")]
+#[should_panic(expected = "CallEnded")]
 fn test_stake_ended_call() {
     let env = Env::default();
     env.mock_all_auths();
@@ -212,7 +212,7 @@ fn test_stake_ended_call() {
 }
 
 #[test]
-#[should_panic(expected = "ContractPaused")]
+#[should_panic(expected = "Paused")]
 fn test_create_call_paused() {
     let env = Env::default();
     env.mock_all_auths();
@@ -567,7 +567,7 @@ fn test_duplicate_vouch_ignored() {
 }
 
 #[test]
-#[should_panic(expected = "Not an authorized staker")]
+#[should_panic(expected = "NotAuthorizedStaker")]
 fn test_vouch_requires_authorized_staker() {
     let env = Env::default();
     env.mock_all_auths();
@@ -602,7 +602,7 @@ fn test_admin_whitelist_bypass() {
 }
 
 #[test]
-#[should_panic(expected = "Token not whitelisted")]
+#[should_panic(expected = "TokenNotWhitelisted")]
 fn test_create_call_rejects_non_whitelisted_token() {
     let env = Env::default();
     env.mock_all_auths();
@@ -669,7 +669,7 @@ fn test_archive_settled_call() {
 }
 
 #[test]
-#[should_panic(expected = "Call not yet settled")]
+#[should_panic(expected = "CallNotSettled")]
 fn test_archive_unsettled_call_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -801,7 +801,7 @@ fn test_exit_early_no_position() {
 }
 
 #[test]
-#[should_panic(expected = "No stake found")]
+#[should_panic(expected = "NoStakeFound")]
 fn test_exit_early_no_stake() {
     let env = Env::default();
     env.mock_all_auths();
@@ -834,7 +834,7 @@ fn test_exit_early_no_stake() {
 }
 
 #[test]
-#[should_panic(expected = "Call ended")]
+#[should_panic(expected = "CallEnded")]
 fn test_exit_early_after_end_time() {
     let env = Env::default();
     env.mock_all_auths();
@@ -867,7 +867,7 @@ fn test_exit_early_after_end_time() {
 }
 
 #[test]
-#[should_panic(expected = "Call settled")]
+#[should_panic(expected = "CallSettled")]
 fn test_exit_early_after_settled() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1004,7 +1004,7 @@ fn test_exit_early_multiple_stakers() {
 }
 
 #[test]
-#[should_panic(expected = "ContractPaused")]
+#[should_panic(expected = "Paused")]
 fn test_exit_early_paused() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1242,7 +1242,7 @@ fn test_withdraw_multi_outcome() {
 }
 
 #[test]
-#[should_panic(expected = "Invalid outcome index")]
+#[should_panic(expected = "InvalidOutcomeIndex")]
 fn test_stake_invalid_outcome_index() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1277,7 +1277,7 @@ fn test_stake_invalid_outcome_index() {
 }
 
 #[test]
-#[should_panic(expected = "Must have at least 2 outcomes")]
+#[should_panic(expected = "TooFewOutcomes")]
 fn test_create_call_too_few_outcomes() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1307,7 +1307,7 @@ fn test_create_call_too_few_outcomes() {
 }
 
 #[test]
-#[should_panic(expected = "Too many outcomes")]
+#[should_panic(expected = "TooManyOutcomes")]
 fn test_create_call_too_many_outcomes() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1434,7 +1434,7 @@ fn test_get_binary_pools() {
 }
 
 #[test]
-#[should_panic(expected = "Pools length must be 2 for binary market")]
+#[should_panic(expected = "TooManyOutcomes")]
 fn test_get_binary_pools_non_binary_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1619,7 +1619,7 @@ fn test_fee_on_transfer_tokens() {
 }
 
 #[test]
-#[should_panic(expected = "Amount must be greater than zero")]
+#[should_panic(expected = "InvalidAmount")]
 fn test_zero_amount_stake_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1760,7 +1760,7 @@ fn test_update_fee_config_success() {
 }
 
 #[test]
-#[should_panic(expected = "InvalidFeeConfig")]
+#[should_panic(expected = "InvalidAmount")]
 fn test_update_fee_config_bps_too_low() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1774,7 +1774,7 @@ fn test_update_fee_config_bps_too_low() {
 }
 
 #[test]
-#[should_panic(expected = "InvalidFeeConfig")]
+#[should_panic(expected = "InvalidAmount")]
 fn test_update_fee_config_bps_too_high() {
     let env = Env::default();
     env.mock_all_auths();
@@ -2182,7 +2182,7 @@ fn test_accept_admin_without_pending_reverts() {
 // ΓöÇΓöÇ SC-012 Pausable guard ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 #[test]
-#[should_panic(expected = "ContractPaused")]
+#[should_panic(expected = "Paused")]
 fn test_paused_blocks_create_call() {
     let env = Env::default();
     env.mock_all_auths();

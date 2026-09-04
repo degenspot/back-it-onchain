@@ -195,8 +195,7 @@ impl CallRegistry {
 
     fn assert_not_paused(env: &Env) {
         if Self::is_paused(env) {
-            // ContractError::ContractPaused = 2 (SC-012 acceptance)
-            panic!("{:?}", ContractError::ContractPaused);
+            panic!("{:?}", ContractError::Paused);
         }
     }
 
@@ -216,7 +215,7 @@ impl CallRegistry {
             .get(&DataKey::WhitelistedToken(token.clone()))
             .unwrap_or(false);
         if !whitelisted {
-            panic!("Token not whitelisted");
+            panic!("{:?}", ContractError::TokenNotWhitelisted);
         }
     }
 
@@ -591,7 +590,7 @@ impl CallRegistry {
         voucher.require_auth();
 
         if !Self::is_authorized_staker_internal(&env, &voucher) {
-            panic!("Not an authorized staker");
+            panic!("{:?}", ContractError::NotAuthorizedStaker);
         }
 
         let key = DataKey::TokenProposal(token.clone());
@@ -714,16 +713,16 @@ impl CallRegistry {
         creator.require_auth();
 
         if end_ts <= env.ledger().timestamp() {
-            panic!("End time must be in future");
+            panic!("{:?}", ContractError::InvalidEndTime);
         }
         if stake_amount <= 0 {
-            panic!("Amount must be greater than zero");
+            panic!("{:?}", ContractError::InvalidAmount);
         }
         if metadata.num_outcomes < MIN_OUTCOMES {
-            panic!("Must have at least 2 outcomes");
+            panic!("{:?}", ContractError::TooFewOutcomes);
         }
         if metadata.num_outcomes > MAX_OUTCOMES {
-            panic!("Too many outcomes");
+            panic!("{:?}", ContractError::TooManyOutcomes);
         }
 
         // Transfer stake from creator to contract (SAC escrow with
@@ -735,7 +734,7 @@ impl CallRegistry {
         let balance_after = token_client.balance(&env.current_contract_address());
         let net_amount = balance_after - balance_before;
         if net_amount <= 0 {
-            panic!("Amount must be greater than zero");
+            panic!("{:?}", ContractError::InvalidAmount);
         }
 
         // Deposit net (post token-fee) amount into vault (issue #159)
@@ -832,16 +831,16 @@ impl CallRegistry {
             .expect("Call does not exist");
 
         if env.ledger().timestamp() >= call.end_ts {
-            panic!("Call ended");
+            panic!("{:?}", ContractError::CallEnded);
         }
         if call.settled {
-            panic!("Call settled");
+            panic!("{:?}", ContractError::CallSettled);
         }
         if amount <= 0 {
-            panic!("Amount must be greater than zero");
+            panic!("{:?}", ContractError::InvalidAmount);
         }
         if outcome_index >= call.outcome_pools.len() as u32 {
-            panic!("Invalid outcome index");
+            panic!("{:?}", ContractError::InvalidOutcomeIndex);
         }
 
         // Count an address once per call, even when it stakes on multiple
@@ -864,7 +863,7 @@ impl CallRegistry {
         let balance_after = token_client.balance(&env.current_contract_address());
         let received = balance_after - balance_before;
         if received <= 0 {
-            panic!("Amount must be greater than zero");
+            panic!("{:?}", ContractError::InvalidAmount);
         }
 
         // Dynamic surge fee (issue #161) applied on the actually-received amount
@@ -1071,10 +1070,10 @@ impl CallRegistry {
 
         // Call must still be active (not ended, not settled)
         if call.settled {
-            panic!("Call settled");
+            panic!("{:?}", ContractError::CallSettled);
         }
         if env.ledger().timestamp() >= call.end_ts {
-            panic!("Call ended");
+            panic!("{:?}", ContractError::CallEnded);
         }
 
         // Find which outcome the user has staked on.
@@ -1092,7 +1091,7 @@ impl CallRegistry {
 
         let outcome_index = match found_outcome {
             Some(idx) => idx,
-            None => panic!("No stake found"),
+            None => panic!("{:?}", ContractError::NoStakeFound),
         };
 
         // Calculate payout: 80% returned to user, 20% held back as an exit penalty.
@@ -1314,7 +1313,7 @@ impl CallRegistry {
             .expect("Call does not exist");
 
         if !call.settled {
-            panic!("Call not yet settled");
+            panic!("{:?}", ContractError::CallNotSettled);
         }
 
         env.storage().persistent().remove(&key);
@@ -1342,10 +1341,10 @@ impl CallRegistry {
         admin.require_auth();
 
         if to.len() != weights.len() {
-            panic!("{:?}", ContractError::InvalidWeights);
+            panic!("{:?}", ContractError::InvalidAmount);
         }
         if to.is_empty() {
-            panic!("{:?}", ContractError::InvalidWeights);
+            panic!("{:?}", ContractError::InvalidAmount);
         }
 
         let total_fees: i128 = env
@@ -1529,7 +1528,7 @@ impl CallRegistry {
         admin.require_auth();
 
         if bps < 50 || bps > 200 {
-            panic!("{:?}", ContractError::InvalidFeeConfig);
+            panic!("{:?}", ContractError::InvalidAmount);
         }
         // Validate non-zero: in Soroban, Address is never "zero" in the same sense,
         // but we reject if it equals the contract itself only when explicitly required;
@@ -1620,8 +1619,11 @@ impl CallRegistry {
             .persistent()
             .get(&DataKey::Call(call_id))
             .expect("Call does not exist");
-        if call.outcome_pools.len() != 2 {
-            panic!("Pools length must be 2 for binary market");
+        if call.outcome_pools.len() < 2 {
+            panic!("{:?}", ContractError::TooFewOutcomes);
+        }
+        if call.outcome_pools.len() > 2 {
+            panic!("{:?}", ContractError::TooManyOutcomes);
         }
         let yes = call.outcome_pools.get(0).unwrap();
         let no = call.outcome_pools.get(1).unwrap();

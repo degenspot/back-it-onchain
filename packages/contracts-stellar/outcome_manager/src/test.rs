@@ -135,7 +135,7 @@ fn test_set_quorum_threshold() {
 }
 
 #[test]
-#[should_panic(expected = "Denominator cannot be zero")]
+#[should_panic(expected = "ZeroDenominator")]
 fn test_set_quorum_threshold_zero_denominator() {
     let env = Env::default();
     env.mock_all_auths();
@@ -150,7 +150,7 @@ fn test_set_quorum_threshold_zero_denominator() {
 }
 
 #[test]
-#[should_panic(expected = "Numerator must be in range")]
+#[should_panic(expected = "InvalidQuorumNumerator")]
 fn test_set_quorum_threshold_numerator_exceeds_denominator() {
     let env = Env::default();
     env.mock_all_auths();
@@ -387,7 +387,7 @@ fn test_has_withdrawn() {
 }
 
 #[test]
-#[should_panic(expected = "Contract is paused")]
+#[should_panic(expected = "Paused")]
 fn test_submit_outcome_when_paused() {
     let env = Env::default();
     env.mock_all_auths();
