@@ -8,12 +8,14 @@ import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
 import { CallsModule } from '../calls/calls.module';
 import { PaymasterPolicyService } from '../oracle/paymaster-policy.service';
+import { IndexerDlqModule } from '../stellar-indexer/indexer-dlq.module';
 
 @Module({
   imports: [
     ConfigModule,
     TypeOrmModule.forFeature([PlatformSettings, AuditLog]),
     forwardRef(() => CallsModule),
+    IndexerDlqModule,
   ],
   controllers: [AdminController],
   providers: [AdminService, PaymasterPolicyService, AuditLogService],

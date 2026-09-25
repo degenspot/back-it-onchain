@@ -3,6 +3,7 @@ import {
   Logger,
   OnModuleInit,
   OnModuleDestroy,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -16,6 +17,7 @@ import {
 } from './ledger-checkpoint.service';
 import { CallEventStoreService } from './call-event-store.service';
 import { Retryable } from '../../decorators/retryable.decorator';
+import { IndexerDlqService } from './indexer-dlq.service';
 
 export interface StellarIndexerConfig {
   rpcUrl: string;
@@ -62,6 +64,7 @@ export class StellarIndexerService implements OnModuleInit, OnModuleDestroy {
     @InjectRepository(Call)
     callRepository: Repository<Call>,
     private readonly callEventStore: CallEventStoreService,
+    @Optional() private readonly dlq: IndexerDlqService,
   ) {
     this.callRepository = callRepository;
   }
@@ -214,6 +217,16 @@ export class StellarIndexerService implements OnModuleInit, OnModuleDestroy {
         'Max retries reached, skipping this poll cycle:',
         error,
       );
+      // Park the poll-level failure so operators can inspect it
+      await this.dlq?.addFailedEvent({
+        contractId: this.config.contractIds.join(','),
+        ledger: this.currentLedger,
+        rawXdr: '',
+        errorMessage: (error as Error).message,
+        errorStack: (error as Error).stack,
+        failedAt: new Date().toISOString(),
+        attemptsMade: this.config.maxRetries ?? 3,
+      });
     }
   }
 
@@ -240,10 +253,20 @@ export class StellarIndexerService implements OnModuleInit, OnModuleDestroy {
           const parsedEvent = this.parseEvent(event, contractId);
           await this.storeEvent(parsedEvent);
         } catch (error) {
+          const err = error as Error;
           this.logger.error(
             `Error parsing event for contract ${contractId}:`,
-            error,
+            err,
           );
+          await this.dlq?.addFailedEvent({
+            contractId,
+            ledger: event.ledger,
+            rawXdr: JSON.stringify(event),
+            errorMessage: err.message,
+            errorStack: err.stack,
+            failedAt: new Date().toISOString(),
+            attemptsMade: 1,
+          });
         }
       }
     } catch (error) {

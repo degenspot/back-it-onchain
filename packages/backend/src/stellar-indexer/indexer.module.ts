@@ -10,9 +10,10 @@ import { CallEventStoreService } from './services/call-event-store.service';
 import { DiagnosticParserService } from './services/diagnostic-parser.service';
 import { RpcCircuitBreakerService } from './services/rpc-circuit-breaker.service';
 import { IndexerController } from './controllers/indexer.controller';
+import { IndexerDlqModule } from './indexer-dlq.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Call, StakeActivity])],
+  imports: [TypeOrmModule.forFeature([Call, StakeActivity]), IndexerDlqModule],
   providers: [
     StellarIndexerService,
     BaseIndexerService,
