@@ -1,6 +1,25 @@
+/**
+ * call-event-store.service.ts  (BE-002 / BE-004)
+ *
+ * Single write path shared by StellarIndexerService and BaseIndexerService.
+ *
+ * Guarantees
+ * ──────────
+ *  Idempotent upsert — keyed on (chain, txHash, eventSequence).
+ *    Re-delivery of the same event updates in place, never inserts duplicates.
+ *
+ *  Reorg handling — handleReorg() soft-orphans conflicting rows at the same
+ *    (chain, ledgerHeight) if their blockHash no longer matches the newly
+ *    observed hash. Uses an atomic QueryRunner transaction so the entire
+ *    orphan batch commits or rolls back as one unit.
+ *
+ *  Full-text search — the `searchVector` tsvector column is maintained by a
+ *    DB trigger (migration 1756290000000), no application code needed.
+ */
+
 import { Injectable, Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull } from 'typeorm';
+import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
+import { Repository, IsNull, DataSource, QueryRunner } from 'typeorm';
 import { Call, ChainType } from '../entities/call.entity';
 
 export interface UpsertCallEventInput {
@@ -13,33 +32,14 @@ export interface UpsertCallEventInput {
   eventSequence?: number;
   ledgerHeight?: number;
   /**
-   * Block/ledger hash for the height this event was observed at. When
-   * supplied together with `ledgerHeight`, this is the cursor used to
-   * detect chain reorgs — see handleReorg().
+   * Block/ledger hash for reorg detection.
+   * When supplied with `ledgerHeight`, handleReorg() runs automatically
+   * before the upsert.
    */
   blockHash?: string;
   eventData?: Record<string, unknown>;
 }
 
-/**
- * CallEventStoreService — BE-04.
- *
- * Single write path shared by StellarIndexerService and BaseIndexerService
- * so both chains get the same idempotency and reorg-handling guarantees
- * instead of re-implementing check-then-insert logic per chain.
- *
- *   - Idempotent upsert: keyed on (chain, txHash, eventSequence). Re-delivery
- *     of the same event (indexer restart, overlapping poll windows) updates
- *     the existing row instead of creating a duplicate.
- *   - Reorg handling: if a previously-stored row at the same (chain,
- *     ledgerHeight) carries a different blockHash than what's newly
- *     observed, the chain reorganized at that height. Older rows are
- *     soft-invalidated (`isOrphaned = true`) rather than deleted, keeping
- *     the audit trail intact.
- *   - Full-text search: the `searchVector` tsvector column is kept in sync
- *     by a DB trigger (see migration 1756290000000), so no application code
- *     needs to maintain it explicitly.
- */
 @Injectable()
 export class CallEventStoreService {
   private readonly logger = new Logger(CallEventStoreService.name);
@@ -47,9 +47,15 @@ export class CallEventStoreService {
   constructor(
     @InjectRepository(Call)
     private readonly callRepository: Repository<Call>,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
   ) {}
 
+  // ── Idempotent upsert ─────────────────────────────────────────────────────
+
   async upsertEvent(input: UpsertCallEventInput): Promise<Call> {
+    // Run reorg check before writing so we never persist a row on a
+    // stale branch.
     if (input.blockHash && input.ledgerHeight != null) {
       await this.handleReorg(input.chain, input.ledgerHeight, input.blockHash);
     }
@@ -90,14 +96,17 @@ export class CallEventStoreService {
     return this.callRepository.save(call);
   }
 
+  // ── Reorg detection (atomic QueryRunner) ──────────────────────────────────
+
   /**
    * Compares the newly observed blockHash for `ledgerHeight` against any
-   * previously stored rows at that same height. A mismatch means the chain
-   * reorganized and the earlier rows sit on an orphaned branch — they are
-   * flagged `isOrphaned = true` (soft-invalidated, never deleted) so
-   * downstream consumers can filter them out while the audit trail is kept.
+   * previously stored rows at that height. A mismatch means the chain
+   * reorganized — the earlier rows are on an orphaned branch.
    *
-   * Returns the number of rows newly orphaned by this check.
+   * All orphan writes happen inside a single QueryRunner transaction so the
+   * batch either fully commits or fully rolls back.
+   *
+   * Returns the number of rows newly orphaned.
    */
   async handleReorg(
     chain: ChainType,
@@ -109,30 +118,92 @@ export class CallEventStoreService {
     });
 
     const conflicting = atHeight.filter(
-      (row) =>
-        row.blockHash && row.blockHash !== newBlockHash && !row.isOrphaned,
+      (row) => row.blockHash && row.blockHash !== newBlockHash && !row.isOrphaned,
     );
 
     if (conflicting.length === 0) return 0;
 
     this.logger.warn(
-      `Reorg detected on ${chain} at height ${ledgerHeight}: orphaning ` +
-        `${conflicting.length} row(s) whose blockHash no longer matches ${newBlockHash}`,
+      `Reorg detected on ${chain} at height ${ledgerHeight}: ` +
+        `orphaning ${conflicting.length} row(s) (old hash ≠ ${newBlockHash})`,
     );
 
-    for (const row of conflicting) {
-      row.isOrphaned = true;
+    const runner: QueryRunner = this.dataSource.createQueryRunner();
+    await runner.connect();
+    await runner.startTransaction();
+
+    try {
+      for (const row of conflicting) {
+        row.isOrphaned = true;
+      }
+      await runner.manager.save(Call, conflicting);
+      await runner.commitTransaction();
+    } catch (err) {
+      await runner.rollbackTransaction();
+      this.logger.error(`handleReorg transaction rolled back: ${(err as Error).message}`);
+      throw err;
+    } finally {
+      await runner.release();
     }
-    await this.callRepository.save(conflicting);
+
     return conflicting.length;
   }
 
-  /** Non-orphaned events for a chain, most recent first — convenience for the orchestrator/controller. */
+  /**
+   * Atomically rewinds all event rows for a chain back to `rewindToLedger`.
+   * Every row with ledgerHeight > rewindToLedger is soft-orphaned inside
+   * a single SERIALIZABLE transaction — guaranteeing no partial rollbacks.
+   *
+   * Called by LedgerCheckpointService.atomicRewind() on hash-fork detection.
+   */
+  async rewindToLedger(chain: ChainType, rewindToLedger: number): Promise<number> {
+    const runner: QueryRunner = this.dataSource.createQueryRunner();
+    await runner.connect();
+    await runner.startTransaction('SERIALIZABLE');
+
+    try {
+      const result = await runner.manager
+        .createQueryBuilder()
+        .update(Call)
+        .set({ isOrphaned: true })
+        .where('chain = :chain', { chain })
+        .andWhere('ledgerHeight > :rewindToLedger', { rewindToLedger })
+        .andWhere('isOrphaned = false')
+        .execute();
+
+      const rowsAffected = result.affected ?? 0;
+      await runner.commitTransaction();
+
+      this.logger.log(
+        `rewindToLedger(${chain}, ${rewindToLedger}): orphaned ${rowsAffected} rows`,
+      );
+      return rowsAffected;
+    } catch (err) {
+      await runner.rollbackTransaction();
+      this.logger.error(`rewindToLedger transaction rolled back: ${(err as Error).message}`);
+      throw err;
+    } finally {
+      await runner.release();
+    }
+  }
+
+  // ── Query helpers ─────────────────────────────────────────────────────────
+
+  /** Non-orphaned events for a chain, most recent first. */
   async getActiveEvents(chain: ChainType, limit = 50): Promise<Call[]> {
     return this.callRepository.find({
       where: { chain, isOrphaned: false },
       order: { createdAt: 'DESC' },
       take: limit,
     });
+  }
+
+  /** Returns the highest committed ledger height for a chain. */
+  async getLastIndexedLedger(chain: ChainType): Promise<number | null> {
+    const row = await this.callRepository.findOne({
+      where: { chain, isOrphaned: false },
+      order: { ledgerHeight: 'DESC' },
+    });
+    return row?.ledgerHeight ?? null;
   }
 }

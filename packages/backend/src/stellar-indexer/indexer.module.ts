@@ -1,14 +1,17 @@
 /**
- * indexer.module.ts
+ * indexer.module.ts  (BE-001 / BE-002)
  *
- * Wires together all stellar-indexer services. SorobanRpcClient is provided
- * globally by RpcModule (already imported in AppModule) so it does not need
- * to be re-imported here. EventEmitterModule is also global via AppModule.
+ * Wires all stellar-indexer services and registers the LedgerCheckpointEntity
+ * so it is managed by TypeORM. SorobanRpcClient and EventEmitter2 are
+ * global providers from RpcModule / EventEmitterModule respectively.
  */
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+
 import { Call } from './entities/call.entity';
+import { LedgerCheckpointEntity } from './entities/ledger-checkpoint.entity';
 import { StakeActivity } from '../calls/stake-activity.entity';
+
 import { StellarIndexerService } from './services/stellar-indexer.service';
 import { BaseIndexerService } from './services/base-indexer.service';
 import { MultiChainIndexerService } from './services/multi-chain-indexer.service';
@@ -17,7 +20,9 @@ import { CallEventStoreService } from './services/call-event-store.service';
 import { IndexerController } from './controllers/indexer.controller';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Call, StakeActivity])],
+  imports: [
+    TypeOrmModule.forFeature([Call, LedgerCheckpointEntity, StakeActivity]),
+  ],
   providers: [
     StellarIndexerService,
     BaseIndexerService,
