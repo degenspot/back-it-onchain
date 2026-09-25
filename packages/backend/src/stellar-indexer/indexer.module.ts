@@ -1,3 +1,10 @@
+/**
+ * indexer.module.ts
+ *
+ * Wires together all stellar-indexer services. SorobanRpcClient is provided
+ * globally by RpcModule (already imported in AppModule) so it does not need
+ * to be re-imported here. EventEmitterModule is also global via AppModule.
+ */
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Call } from './entities/call.entity';
