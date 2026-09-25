@@ -25,6 +25,7 @@ import {
   Logger,
   OnModuleInit,
   OnModuleDestroy,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -38,6 +39,7 @@ import {
 } from './ledger-checkpoint.service';
 import { CallEventStoreService } from './call-event-store.service';
 import { MultiOutcomeEventService } from './multi-outcome-event.service';
+import { IndexerLockService } from './indexer-lock.service';
 import { SorobanRpcClient } from '../../config/soroban-rpc.client';
 import {
   withRetry,
@@ -127,6 +129,7 @@ export class StellarIndexerService implements OnModuleInit, OnModuleDestroy {
     private readonly sorobanRpcClient: SorobanRpcClient,
     private readonly eventEmitter: EventEmitter2,
     private readonly multiOutcomeService: MultiOutcomeEventService,
+    @Optional() private readonly lockService?: IndexerLockService,
   ) {}
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -234,6 +237,13 @@ export class StellarIndexerService implements OnModuleInit, OnModuleDestroy {
     if (!this.isRunning) return;
 
     try {
+      // Guard: only process events when this pod holds the distributed lock.
+      // If no lock service is configured (e.g. local dev), always proceed.
+      if (this.lockService && !this.lockService.isCurrentLeader()) {
+        this.logger.debug('Not the indexer leader — skipping poll cycle.');
+        return false;
+      }
+
       const advanced = await this.fetchAndProcessEvents();
       // Adaptive interval
       if (advanced) {

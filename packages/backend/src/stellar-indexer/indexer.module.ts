@@ -1,9 +1,11 @@
 /**
- * indexer.module.ts  (BE-001 / BE-002 / BE-003)
+ * indexer.module.ts  (BE-001 / BE-002 / BE-003 / BE-004)
  *
  * Wires all stellar-indexer services and registers TypeORM entities.
  * SorobanRpcClient and EventEmitter2 are global providers from
- * RpcModule / EventEmitterModule (both imported in AppModule).
+ * RpcModule / EventEmitterModule respectively (both in AppModule).
+ * IndexerLockService and RedisClientProvider are also registered here
+ * so the indexer can acquire the distributed leader lock on startup.
  */
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -20,6 +22,8 @@ import { MultiChainIndexerService } from './services/multi-chain-indexer.service
 import { LedgerCheckpointService } from './services/ledger-checkpoint.service';
 import { CallEventStoreService } from './services/call-event-store.service';
 import { MultiOutcomeEventService } from './services/multi-outcome-event.service';
+import { IndexerLockService } from './services/indexer-lock.service';
+import { RedisClientProvider } from '../config/redis.config';
 import { IndexerController } from './controllers/indexer.controller';
 
 @Module({
@@ -33,6 +37,8 @@ import { IndexerController } from './controllers/indexer.controller';
     ]),
   ],
   providers: [
+    RedisClientProvider,
+    IndexerLockService,
     StellarIndexerService,
     BaseIndexerService,
     MultiChainIndexerService,
@@ -48,6 +54,7 @@ import { IndexerController } from './controllers/indexer.controller';
     LedgerCheckpointService,
     CallEventStoreService,
     MultiOutcomeEventService,
+    IndexerLockService,
   ],
 })
 export class IndexerModule {}
