@@ -18,6 +18,7 @@ import { PaymasterPolicyService } from '../oracle/paymaster-policy.service';
 import { PaymasterBudgetSnapshot } from '../oracle/paymaster-policy.service';
 import { AuditLogService } from '../oracle/audit-log.service';
 import { AuditLog } from '../oracle/audit-log.entity';
+import { IndexerDlqService, DlqJobData } from '../stellar-indexer/services/indexer-dlq.service';
 
 class CircuitBreakerDto {
   paused!: boolean;
@@ -25,6 +26,10 @@ class CircuitBreakerDto {
 
 class ResetBudgetDto {
   address?: string;
+}
+
+class DlqRetryWithPatchDto {
+  patch?: Partial<DlqJobData>;
 }
 
 @Controller('admin')
@@ -35,6 +40,7 @@ export class AdminController {
     private readonly callsService: CallsService,
     private readonly paymasterPolicyService: PaymasterPolicyService,
     private readonly auditLogService: AuditLogService,
+    private readonly dlqService: IndexerDlqService,
   ) {}
 
   /**
@@ -101,5 +107,49 @@ export class AdminController {
     @Query('callId') callId?: string,
   ): Promise<AuditLog[]> {
     return this.auditLogService.query(callId);
+  }
+
+  // ── DLQ ────────────────────────────────────────────────────────────────
+
+  /**
+   * GET /admin/indexer/dlq/list?state=failed&start=0&end=49
+   * List jobs in the indexer dead-letter queue.
+   */
+  @Get('indexer/dlq/list')
+  async listDlqJobs(
+    @Query('state') state: string = 'failed',
+    @Query('start') start: string = '0',
+    @Query('end') end: string = '49',
+  ) {
+    const jobs = await this.dlqService.listJobs(
+      state as any,
+      parseInt(start, 10),
+      parseInt(end, 10),
+    );
+    return jobs.map((j) => ({
+      id: j.id,
+      state,
+      data: j.data,
+      failedReason: j.failedReason,
+      attemptsMade: j.attemptsMade,
+      timestamp: j.timestamp,
+    }));
+  }
+
+  /**
+   * POST /admin/indexer/dlq/retry/:id
+   * Re-drive a single failed job. Optionally pass { patch: {...} } in the
+   * body to override fields on the job data before re-queuing.
+   */
+  @Post('indexer/dlq/retry/:id')
+  @HttpCode(HttpStatus.OK)
+  async retryDlqJob(
+    @Param('id') id: string,
+    @Body() body: DlqRetryWithPatchDto,
+  ) {
+    if (body?.patch && Object.keys(body.patch).length > 0) {
+      return this.dlqService.retryJobWithData(id, body.patch);
+    }
+    return this.dlqService.retryJob(id);
   }
 }

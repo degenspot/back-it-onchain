@@ -172,4 +172,14 @@ export const validationSchema = Joi.object({
   DISCORD_ADMIN_WEBHOOK_URL: Joi.string()
     .uri({ scheme: ['https'] })
     .optional(),
+
+  // ── Indexer DLQ (BullMQ) ───────────────────────────────────────────────
+  // Max attempts before a Soroban event is routed to the dead-letter queue.
+  // Defaults to 5 per the issue spec.
+  INDEXER_DLQ_MAX_ATTEMPTS: Joi.number().integer().min(1).default(5),
+  // How long (ms) completed DLQ jobs are retained in Redis. Default: 7 days.
+  INDEXER_DLQ_JOB_TTL_MS: Joi.number()
+    .integer()
+    .min(60000)
+    .default(7 * 24 * 60 * 60 * 1000),
 });
