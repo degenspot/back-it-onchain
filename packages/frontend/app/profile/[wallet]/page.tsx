@@ -19,6 +19,7 @@ import { FollowButton } from '@/src/components/follow';
 import { useProfile } from '@/src/hooks/useProfile';
 import { useFollow } from '@/src/hooks/useFollow';
 import { AvatarUploader } from '@/src/components/AvatarUploader';
+import { BadgeGallery } from '@/src/components/BadgeGallery';
 
 export default function WalletProfilePage() {
   const params = useParams<{ wallet: string | string[] }>();
@@ -94,6 +95,15 @@ export default function WalletProfilePage() {
                   currentScore={user.reputationScore ?? 0}
                 />
               )}
+              <div className="mt-4">
+                <BadgeGallery progress={{
+                  'first-call': history.length,
+                  'sharp-shooter': history.filter((entry) => entry.outcome === 'won').length,
+                  'streak-master': history.filter((entry) => entry.outcome === 'won').length,
+                  'oracle': user.reputationScore ?? 0,
+                  'community-pillar': stats?.followersCount ?? 0,
+                }} />
+              </div>
             </div>
           </>
         ) : null}

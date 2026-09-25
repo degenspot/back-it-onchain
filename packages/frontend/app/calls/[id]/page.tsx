@@ -20,6 +20,8 @@ import { MarketDetailSkeleton } from "@/components/MarketDetailSkeleton";
 import { MarketDetailRightSidebarSkeleton } from "@/components/MarketDetailRightSidebarSkeleton";
 import { PoolBar } from "@/src/components/PoolBar";
 import { ParticipantList } from "@/src/components/ParticipantList";
+import { PoolLiquidityDepth } from "@/src/components/PoolLiquidityDepth";
+import { SocialCardGenerator } from "@/src/components/SocialCardGenerator";
 import { createMockCallSocket, useCallLive } from "@/src/hooks/useCallLive";
 import * as Dialog from "@radix-ui/react-dialog";
 import { toast } from "sonner";
@@ -216,6 +218,7 @@ export default function CallDetailPage() {
                         </div>
 
                         <PoolBar pool={live.pool} />
+                        <PoolLiquidityDepth pool={live.pool} />
 
                         <div className="flex flex-col gap-2">
                             <span className="text-sm text-muted-foreground">Participants</span>
@@ -299,6 +302,18 @@ export default function CallDetailPage() {
                                         Share to X
                                     </button>
                                 </div>
+                                <SocialCardGenerator
+                                    className="mt-4"
+                                    data={{
+                                        title: shareTitle,
+                                        creator: call.creator?.displayName || call.creator?.wallet,
+                                        token: call.asset,
+                                        target: call.target,
+                                        yesPercent: live.yesPercent,
+                                        noPercent: live.noPercent,
+                                        url: typeof window !== 'undefined' ? window.location.href : undefined,
+                                    }}
+                                />
                             </Dialog.Content>
                         </Dialog.Portal>
                     </Dialog.Root>
