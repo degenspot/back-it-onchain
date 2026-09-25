@@ -241,7 +241,11 @@ export class StellarIndexerService implements OnModuleInit, OnModuleDestroy {
       // If no lock service is configured (e.g. local dev), always proceed.
       if (this.lockService && !this.lockService.isCurrentLeader()) {
         this.logger.debug('Not the indexer leader — skipping poll cycle.');
-        return false;
+        // Schedule next tick and return — do not fetch
+        if (this.isRunning) {
+          this.pollTimer = setTimeout(() => void this.pollCycle(), MIN_POLL_MS);
+        }
+        return;
       }
 
       const advanced = await this.fetchAndProcessEvents();
@@ -345,6 +349,10 @@ export class StellarIndexerService implements OnModuleInit, OnModuleDestroy {
   /**
    * One paginated getEvents call.
    * Returns raw events and an optional cursor for the next page.
+   *
+   * The SDK's GetEventsResponse carries a top-level `cursor` string.
+   * When the returned cursor is non-empty, there are more pages to fetch.
+   * Individual EventResponse objects do NOT expose a pagingToken field.
    */
   private async fetchEventsPage(
     startLedger: number,
@@ -356,25 +364,30 @@ export class StellarIndexerService implements OnModuleInit, OnModuleDestroy {
       contractIds: [id],
     }));
 
-    // The Stellar SDK's rpc.Server.getEvents() accepts startLedger OR cursor,
-    // not both. When paginating we switch to the cursor mode.
+    // GetEventsRequest is a discriminated union: startLedger and cursor are
+    // mutually exclusive (cursor?: never in the startLedger branch).
     const requestParams: StellarSdk.rpc.Api.GetEventsRequest = cursor
       ? { filters, limit: this.config.pageSize ?? 200, cursor }
       : { startLedger, filters, limit: this.config.pageSize ?? 200 };
 
-    // Access the underlying rpc.Server via the SorobanRpcClient by calling
-    // getEvents() which is already @Retryable — we wrap again here only for
-    // the outer stream-loop backoff (different retry budget).
     const response = await (
       this.sorobanRpcClient as unknown as {
-        rpc: { getEvents: (p: StellarSdk.rpc.Api.GetEventsRequest) => Promise<StellarSdk.rpc.Api.GetEventsResponse> };
+        rpc: {
+          getEvents: (
+            p: StellarSdk.rpc.Api.GetEventsRequest,
+          ) => Promise<StellarSdk.rpc.Api.GetEventsResponse>;
+        };
       }
     ).rpc.getEvents(requestParams);
 
     const events = response.events ?? [];
+    const pageSize = this.config.pageSize ?? 200;
+
+    // The response cursor advances only when a full page was returned.
+    // An empty or partial page means we have reached the end.
     const nextCursor =
-      events.length === (this.config.pageSize ?? 200) && events.length > 0
-        ? events[events.length - 1].pagingToken
+      events.length === pageSize && response.cursor
+        ? response.cursor
         : undefined;
 
     return { events, cursor: nextCursor };
@@ -397,7 +410,7 @@ export class StellarIndexerService implements OnModuleInit, OnModuleDestroy {
 
     return {
       type: eventType,
-      contractId: event.contractId?.toString() ?? '',
+      contractId: event.contractId ? event.contractId.toString() : '',
       ledger: event.ledger,
       txHash: event.txHash,
       sequence,

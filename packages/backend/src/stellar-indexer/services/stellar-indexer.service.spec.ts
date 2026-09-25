@@ -55,13 +55,15 @@ function fakeEvent(
     type: 'contract',
     ledger: 100,
     ledgerClosedAt: '2024-01-01T00:00:00Z',
-    contractId: 'CTEST',
+    contractId: 'CTEST' as unknown as StellarSdk.Contract,
     txHash: 'txhash001',
-    pagingToken: '100-0',
+    transactionIndex: 0,
+    operationIndex: 0,
+    inSuccessfulContractCall: true,
     topic: [makeSymbolVal('CallCreated')],
     value: makeU64Val(42n),
     ...overrides,
-  } as unknown as StellarSdk.rpc.Api.EventResponse;
+  } as StellarSdk.rpc.Api.EventResponse;
 }
 
 // ─── Setup ────────────────────────────────────────────────────────────────────
@@ -84,7 +86,7 @@ describe('StellarIndexerService (BE-001)', () => {
   };
 
   beforeEach(async () => {
-    mockRpcGetEvents = jest.fn().mockResolvedValue({ events: [] });
+    mockRpcGetEvents = jest.fn().mockResolvedValue({ events: [], cursor: '' });
 
     rpcClient = {
       getLatestLedger: jest.fn().mockResolvedValue({ sequence: 200, id: '', protocolVersion: 0 }),
@@ -155,6 +157,7 @@ describe('StellarIndexerService (BE-001)', () => {
   it('calls upsertEvent and emits domain event for each parsed event', async () => {
     mockRpcGetEvents.mockResolvedValueOnce({
       events: [fakeEvent()],
+      cursor: '',
     });
 
     await service.start();
@@ -177,18 +180,19 @@ describe('StellarIndexerService (BE-001)', () => {
   // ─── Pagination ─────────────────────────────────────────────────────────────
 
   it('follows cursor to fetch subsequent pages until exhausted', async () => {
-    // Page 1 returns 5 events (= pageSize), so a next page is expected
+    // Page 1 returns 5 events (= pageSize), so a next page is expected.
+    // The response-level cursor drives pagination in the SDK (not per-event).
     const page1Events = Array.from({ length: 5 }, (_, i) =>
-      fakeEvent({ id: `100-${i}`, txHash: `tx${i}`, pagingToken: `100-${i}` }),
+      fakeEvent({ id: `100-${i}`, txHash: `tx${i}` }),
     );
-    // Page 2 returns 2 events (< pageSize), so pagination stops
+    // Page 2 returns 2 events (< pageSize), so pagination stops.
     const page2Events = Array.from({ length: 2 }, (_, i) =>
-      fakeEvent({ id: `100-${i + 5}`, txHash: `tx${i + 5}`, pagingToken: `100-${i + 5}` }),
+      fakeEvent({ id: `100-${i + 5}`, txHash: `tx${i + 5}` }),
     );
 
     mockRpcGetEvents
-      .mockResolvedValueOnce({ events: page1Events })
-      .mockResolvedValueOnce({ events: page2Events });
+      .mockResolvedValueOnce({ events: page1Events, cursor: 'cursor-page2' })
+      .mockResolvedValueOnce({ events: page2Events, cursor: '' });
 
     await service.start();
     await new Promise((r) => setTimeout(r, 80));
@@ -227,6 +231,7 @@ describe('StellarIndexerService (BE-001)', () => {
 
     mockRpcGetEvents.mockResolvedValueOnce({
       events: [badEvent, goodEvent],
+      cursor: '',
     });
 
     await service.start();
