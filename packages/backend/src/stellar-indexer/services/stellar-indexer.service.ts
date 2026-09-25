@@ -37,6 +37,7 @@ import {
   InMemoryLedgerCheckpointStore,
 } from './ledger-checkpoint.service';
 import { CallEventStoreService } from './call-event-store.service';
+import { MultiOutcomeEventService } from './multi-outcome-event.service';
 import { SorobanRpcClient } from '../../config/soroban-rpc.client';
 import {
   withRetry,
@@ -125,6 +126,7 @@ export class StellarIndexerService implements OnModuleInit, OnModuleDestroy {
     private readonly callEventStore: CallEventStoreService,
     private readonly sorobanRpcClient: SorobanRpcClient,
     private readonly eventEmitter: EventEmitter2,
+    private readonly multiOutcomeService: MultiOutcomeEventService,
   ) {}
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -542,6 +544,9 @@ export class StellarIndexerService implements OnModuleInit, OnModuleDestroy {
     this.logger.debug(
       `Stored ${event.type} from ${event.contractId} @ ledger ${event.ledger} (id=${stored.id}).`,
     );
+
+    // Dispatch to the multi-outcome pipeline for relational entity writes.
+    await this.multiOutcomeService.handleEvent(event);
 
     // Emit typed NestJS domain event for downstream consumers.
     const domainEventName =
