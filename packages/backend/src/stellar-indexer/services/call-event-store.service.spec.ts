@@ -12,6 +12,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { CallEventStoreService } from './call-event-store.service';
+import type { UpsertCallEventInput } from './call-event-store.service';
 import { Call, ChainType } from '../entities/call.entity';
 
 // ─── QueryRunner factory ──────────────────────────────────────────────────────
@@ -49,6 +50,7 @@ describe('CallEventStoreService (BE-002 / BE-004)', () => {
     find: jest.Mock;
     create: jest.Mock;
     save: jest.Mock;
+    query: jest.Mock;
   };
   let dataSource: { createQueryRunner: jest.Mock };
   let qrMock: ReturnType<typeof makeQueryRunner>;
@@ -61,6 +63,7 @@ describe('CallEventStoreService (BE-002 / BE-004)', () => {
       find: jest.fn(),
       create: jest.fn((x: unknown) => x),
       save: jest.fn((x: unknown) => Promise.resolve(x)),
+      query: jest.fn(),
     };
 
     dataSource = {
@@ -254,5 +257,332 @@ describe('CallEventStoreService (BE-002 / BE-004)', () => {
     // Then the new row was inserted
     expect(repo.create).toHaveBeenCalled();
     expect(repo.save).toHaveBeenCalled();
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // BE-008 — bulk write path
+  // ─────────────────────────────────────────────────────────────────────────
+  describe('bulkUpsertEvents', () => {
+    let query: jest.Mock;
+
+    const event = (
+      over: Partial<UpsertCallEventInput> = {},
+    ): UpsertCallEventInput => ({
+      chain: ChainType.STELLAR,
+      txHash: 'tx-1',
+      eventType: 'CallCreated',
+      eventSequence: 0,
+      ledgerHeight: 100,
+      ...over,
+    });
+
+    /** Bind-parameter arrays from the generated statements. */
+    const params = (): unknown[][] =>
+      query.mock.calls.map((call) => call[1] as unknown[]);
+
+    beforeEach(() => {
+      query = jest.fn().mockResolvedValue([{ id: 'row-1' }]);
+      repo.query = query;
+    });
+
+    it('returns an empty result without touching the database', async () => {
+      await expect(service.bulkUpsertEvents([])).resolves.toEqual({
+        attempted: 0,
+        deduplicated: 0,
+        inserted: 0,
+        duplicatesSkipped: 0,
+        statements: 0,
+        durationMs: 0,
+        throughputPerSecond: 0,
+      });
+      expect(query).not.toHaveBeenCalled();
+    });
+
+    it('writes a whole batch in a single statement', async () => {
+      query.mockResolvedValue([{ id: 'a' }, { id: 'b' }, { id: 'c' }]);
+
+      const result = await service.bulkUpsertEvents([
+        event({ eventSequence: 1 }),
+        event({ eventSequence: 2 }),
+        event({ eventSequence: 3 }),
+      ]);
+
+      expect(query).toHaveBeenCalledTimes(1);
+      expect(result.attempted).toBe(3);
+      expect(result.inserted).toBe(3);
+      expect(result.duplicatesSkipped).toBe(0);
+      expect(result.statements).toBe(1);
+    });
+
+    it('generates an idempotent INSERT with a conflict target on the unique index', async () => {
+      await service.bulkUpsertEvents([event()]);
+
+      const sql = query.mock.calls[0][0] as string;
+      expect(sql).toContain('INSERT INTO "calls"');
+      expect(sql).toContain('ON CONFLICT ("chain", "txHash", "eventSequence")');
+      expect(sql).toContain('DO NOTHING');
+      // RETURNING makes the inserted count exact — skipped rows return nothing.
+      expect(sql).toContain('RETURNING "id"');
+    });
+
+    it('emits sequential $n placeholders across all rows of a chunk', async () => {
+      await service.bulkUpsertEvents([
+        event({ eventSequence: 1 }),
+        event({ eventSequence: 2 }),
+      ]);
+
+      const sql = query.mock.calls[0][0] as string;
+      // 12 columns become parameters per row; createdAt/updatedAt are literal
+      // DEFAULT, so they are not bound.
+      expect(sql).toMatch(/\(\$1, \$2,[\s\S]*\$12, DEFAULT, DEFAULT\)/);
+      // The second row continues the numbering from where the first left off.
+      expect(sql).toMatch(/\(\$13, \$14,[\s\S]*\$24, DEFAULT, DEFAULT\)/);
+      expect(params()[0]).toHaveLength(24);
+    });
+
+    it('binds event data as a serialised jsonb string, not as SQL text', async () => {
+      await service.bulkUpsertEvents([
+        event({ eventData: { amount: '100', note: "'; DROP TABLE calls; --" } }),
+      ]);
+
+      const bound = params()[0];
+      expect(bound[10]).toBe(
+        JSON.stringify({ amount: '100', note: "'; DROP TABLE calls; --" }),
+      );
+    });
+
+    it('normalises absent optional fields to NULL', async () => {
+      await service.bulkUpsertEvents([
+        event({ eventSequence: undefined, ledgerHeight: undefined }),
+      ]);
+
+      const bound = params()[0];
+      expect(bound[3]).toBeNull(); // contractId
+      expect(bound[4]).toBeNull(); // stellarContractId
+      expect(bound[5]).toBeNull(); // baseContractAddress
+      expect(bound[7]).toBeNull(); // eventSequence
+      expect(bound[8]).toBeNull(); // ledgerHeight
+      expect(bound[9]).toBeNull(); // blockHash
+      expect(bound[10]).toBeNull(); // eventData
+    });
+
+    it('lets the database stamp createdAt/updatedAt', async () => {
+      await service.bulkUpsertEvents([event()]);
+
+      const sql = query.mock.calls[0][0] as string;
+      expect(sql).toContain('"createdAt", "updatedAt"');
+      expect(sql).toContain('DEFAULT, DEFAULT');
+    });
+
+    it('generates a uuid primary key in the application', async () => {
+      await service.bulkUpsertEvents([event()]);
+
+      const id = params()[0][0] as string;
+      expect(id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      );
+    });
+
+    it('reports conflicts as duplicates rather than insertions', async () => {
+      // Only one of the three made it past ON CONFLICT DO NOTHING.
+      query.mockResolvedValue([{ id: 'a' }]);
+
+      const result = await service.bulkUpsertEvents([
+        event({ eventSequence: 1 }),
+        event({ eventSequence: 2 }),
+        event({ eventSequence: 3 }),
+      ]);
+
+      expect(result.inserted).toBe(1);
+      expect(result.duplicatesSkipped).toBe(2);
+    });
+
+    it('collapses duplicates within a single batch before writing', async () => {
+      const result = await service.bulkUpsertEvents([
+        event({ eventSequence: 1 }),
+        event({ eventSequence: 1 }),
+        event({ eventSequence: 2 }),
+      ]);
+
+      expect(result.attempted).toBe(3);
+      expect(result.deduplicated).toBe(1);
+      // One statement, two rows — the repeat never reaches the database.
+      expect(query).toHaveBeenCalledTimes(1);
+      expect(params()[0]).toHaveLength(24);
+    });
+
+    it('treats a missing eventSequence as part of the idempotency key', async () => {
+      // Mirrors the IsNull() lookup in upsertEvent: two chain-scoped events
+      // with no sequence are the same event as far as dedupe is concerned.
+      const result = await service.bulkUpsertEvents([
+        event({ txHash: 'tx-a', eventSequence: undefined }),
+        event({ txHash: 'tx-a', eventSequence: undefined }),
+        event({ txHash: 'tx-b', eventSequence: undefined }),
+      ]);
+
+      expect(result.deduplicated).toBe(1);
+    });
+
+    it('does not collapse events that differ only by chain', async () => {
+      const result = await service.bulkUpsertEvents([
+        event({ chain: ChainType.BASE, eventSequence: 1 }),
+        event({ chain: ChainType.STELLAR, eventSequence: 1 }),
+      ]);
+
+      expect(result.deduplicated).toBe(0);
+      expect(params()[0]).toHaveLength(24);
+    });
+
+    it('splits a batch into multiple statements at the row limit', async () => {
+      query.mockResolvedValue([{ id: 'x' }]);
+
+      const result = await service.bulkUpsertEvents(
+        Array.from({ length: 250 }, (_, i) => event({ eventSequence: i })),
+        { maxRowsPerStatement: 100, maxConcurrency: 1 },
+      );
+
+      expect(query).toHaveBeenCalledTimes(3);
+      expect(params().map((p) => p.length)).toEqual([1200, 1200, 600]);
+      expect(result.inserted).toBe(3);
+    });
+
+    it('clamps the row limit so a statement can never exceed the bind-parameter limit', async () => {
+      await service.bulkUpsertEvents([event()], {
+        maxRowsPerStatement: 1_000_000,
+      });
+
+      // 65535 / 12 = 5461 rows max; the service must never ask for more.
+      const rowsPerStatement = (query.mock.calls[0][1] as unknown[]).length / 12;
+      expect(rowsPerStatement).toBeLessThanOrEqual(5461);
+    });
+
+    it('never issues more concurrent statements than maxConcurrency', async () => {
+      let inFlight = 0;
+      let peak = 0;
+      query.mockImplementation(async () => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await Promise.resolve();
+        inFlight -= 1;
+        return [{ id: 'x' }];
+      });
+
+      await service.bulkUpsertEvents(
+        Array.from({ length: 40 }, (_, i) => event({ eventSequence: i })),
+        { maxRowsPerStatement: 1, maxConcurrency: 3 },
+      );
+
+      expect(peak).toBeLessThanOrEqual(3);
+      expect(query).toHaveBeenCalledTimes(40);
+    });
+
+    it('retries a failed statement and succeeds on a later attempt', async () => {
+      query
+        .mockRejectedValueOnce(new Error('deadlock detected'))
+        .mockResolvedValueOnce([{ id: 'a' }]);
+
+      const result = await service.bulkUpsertEvents([event()], {
+        maxRetries: 2,
+        retryDelayMs: 1,
+      });
+
+      expect(query).toHaveBeenCalledTimes(2);
+      expect(result.inserted).toBe(1);
+    });
+
+    it('gives up after exhausting retries but does not throw', async () => {
+      query.mockRejectedValue(new Error('connection terminated'));
+
+      const result = await service.bulkUpsertEvents(
+        [event(), event({ eventSequence: 2 })],
+        { maxRetries: 1, retryDelayMs: 1 },
+      );
+
+      expect(query).toHaveBeenCalledTimes(2); // initial + 1 retry
+      expect(result.inserted).toBe(0);
+      expect(result.duplicatesSkipped).toBe(2);
+    });
+
+    it('keeps writing later chunks after one chunk is abandoned', async () => {
+      query
+        .mockRejectedValueOnce(new Error('connection terminated'))
+        .mockResolvedValue([{ id: 'a' }]);
+
+      const result = await service.bulkUpsertEvents(
+        Array.from({ length: 4 }, (_, i) => event({ eventSequence: i })),
+        { maxRowsPerStatement: 1, maxConcurrency: 1, maxRetries: 0 },
+      );
+
+      expect(result.inserted).toBe(3);
+    });
+
+    it('reports a non-zero throughput for a completed write', async () => {
+      query.mockResolvedValue([{ id: 'a' }, { id: 'b' }]);
+
+      const result = await service.bulkUpsertEvents([
+        event({ eventSequence: 1 }),
+        event({ eventSequence: 2 }),
+      ]);
+
+      expect(result.durationMs).toBeGreaterThanOrEqual(0);
+      expect(result.throughputPerSecond).toBeGreaterThanOrEqual(0);
+    });
+
+    it('falls back to rowCount when the driver returns a raw result', async () => {
+      // A driver that reports a count but no collected rows.
+      query.mockResolvedValue({ rowCount: 2, command: 'INSERT' });
+
+      const result = await service.bulkUpsertEvents([
+        event({ eventSequence: 1 }),
+        event({ eventSequence: 2 }),
+      ]);
+
+      expect(result.inserted).toBe(2);
+    });
+
+    it('prefers the returned rows over rowCount when a driver sends both', async () => {
+      // RETURNING output is the authoritative count for DO NOTHING; a
+      // rowCount that disagreed with it would misreport what was written.
+      query.mockResolvedValue({ rows: [{ id: 'a' }], rowCount: 99 });
+
+      const result = await service.bulkUpsertEvents([
+        event({ eventSequence: 1 }),
+        event({ eventSequence: 2 }),
+      ]);
+
+      expect(result.inserted).toBe(1);
+    });
+
+    it('reads a wrapped row array from drivers that return a result object', async () => {
+      // Reporting zero for a write that actually happened would show up as a
+      // permanently "duplicate" batch, so the wrapped shape is handled too.
+      query.mockResolvedValue({ rows: [{ id: 'a' }, { id: 'b' }] });
+
+      const result = await service.bulkUpsertEvents([
+        event({ eventSequence: 1 }),
+        event({ eventSequence: 2 }),
+      ]);
+
+      expect(result.inserted).toBe(2);
+    });
+
+    it('reads affectedRows when that is the only count available', async () => {
+      query.mockResolvedValue({ affectedRows: 1 });
+
+      const result = await service.bulkUpsertEvents([event()]);
+
+      expect(result.inserted).toBe(1);
+    });
+
+    it('never reports more rows than were attempted', async () => {
+      // An unrecognised driver shape must under-report (safe to retry), never
+      // invent an insertion count.
+      query.mockResolvedValue(undefined);
+
+      const result = await service.bulkUpsertEvents([event()]);
+
+      expect(result.inserted).toBe(0);
+      expect(result.duplicatesSkipped).toBe(1);
+    });
   });
 });

@@ -24,6 +24,10 @@ import { CallEventStoreService } from './services/call-event-store.service';
 import { MultiOutcomeEventService } from './services/multi-outcome-event.service';
 import { IndexerLockService } from './services/indexer-lock.service';
 import { RedisClientProvider } from '../config/redis.config';
+import {
+  BULK_EVENT_WRITER,
+  BulkEventLoaderService,
+} from './services/bulk-event-loader.service';
 import { DiagnosticParserService } from './services/diagnostic-parser.service';
 import { RpcCircuitBreakerService } from './services/rpc-circuit-breaker.service';
 import { IndexerController } from './controllers/indexer.controller';
@@ -47,6 +51,11 @@ import { IndexerController } from './controllers/indexer.controller';
     LedgerCheckpointService,
     CallEventStoreService,
     MultiOutcomeEventService,
+    {
+      provide: BULK_EVENT_WRITER,
+      useExisting: CallEventStoreService,
+    },
+    BulkEventLoaderService,
     DiagnosticParserService,
     RpcCircuitBreakerService,
   ],
@@ -59,6 +68,7 @@ import { IndexerController } from './controllers/indexer.controller';
     CallEventStoreService,
     MultiOutcomeEventService,
     IndexerLockService,
+    BulkEventLoaderService,
     DiagnosticParserService,
     RpcCircuitBreakerService,
   ],
