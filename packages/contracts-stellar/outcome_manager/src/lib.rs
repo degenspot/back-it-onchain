@@ -101,6 +101,85 @@ pub enum Event {
     CrossChainVerified(u64, bool),                      // Issue #234: call_id, verified
 }
 
+// ── Multi-outcome settlement math (SC-012) ────────────────────────────────────
+//
+// `withdraw_payout` above is binary-only (long/short). This generalizes the
+// same pro-rata parimutuel formula to any number of outcomes: the winning
+// pool is a single number either way, but the "losing side" is now the sum
+// of every *other* outcome's pool rather than one fixed field. Protocol and
+// creator fees are deducted from the losing-pool-net *before* distribution,
+// per the issue's requirement, and multiplication happens before division
+// throughout to minimize truncation loss.
+//
+// This is additive: a pure calculator that doesn't touch call storage or
+// existing withdrawal state, so it doesn't change `withdraw_payout`'s
+// behavior. Wiring an N-outcome call type into `withdraw_payout` itself
+// requires restructuring `CallData` (currently `long_tokens`/`short_tokens`
+// fixed fields, not a pool vector) — out of scope for a single-file change.
+
+/// Computes one user's pro-rata settlement payout in a multi-outcome call.
+///
+/// `Payout = UserStake + (UserStake / WinningPool) * LosingPoolNet`, where
+/// `LosingPoolNet` is the sum of every non-winning outcome's pool minus the
+/// protocol and creator fees. Returns `(net_payout, protocol_fee,
+/// creator_fee)`. Multiplies before dividing throughout.
+///
+/// # Panics
+/// - If `user_stake`, `winning_pool` are negative, or any `losing_pools`
+///   entry is negative.
+/// - If `winning_pool == 0` while `user_stake > 0` (division by zero has no
+///   sensible payout — the pool can't have a positive stake in it and be
+///   empty at the same time).
+/// - On arithmetic overflow (via `checked_*`).
+pub fn compute_multi_outcome_payout(
+    user_stake: i128,
+    winning_pool: i128,
+    losing_pools: &[i128],
+    protocol_fee_bps: i128,
+    creator_fee_bps: i128,
+) -> (i128, i128, i128) {
+    assert!(user_stake >= 0, "user_stake must be non-negative");
+    assert!(winning_pool >= 0, "winning_pool must be non-negative");
+    for &pool in losing_pools {
+        assert!(pool >= 0, "losing pool must be non-negative");
+    }
+
+    if user_stake == 0 {
+        return (0, 0, 0);
+    }
+    assert!(
+        winning_pool > 0,
+        "winning_pool must be > 0 when user_stake > 0"
+    );
+
+    let losing_pool_gross: i128 = losing_pools
+        .iter()
+        .try_fold(0i128, |acc, &p| acc.checked_add(p))
+        .expect("losing pool sum overflow");
+
+    let protocol_fee = losing_pool_gross
+        .checked_mul(protocol_fee_bps)
+        .expect("protocol fee multiplication overflow")
+        / BASIS_POINTS_DENOMINATOR;
+    let creator_fee = losing_pool_gross
+        .checked_mul(creator_fee_bps)
+        .expect("creator fee multiplication overflow")
+        / BASIS_POINTS_DENOMINATOR;
+    let losing_pool_net = losing_pool_gross - protocol_fee - creator_fee;
+
+    // Multiply before dividing to minimize truncation loss.
+    let share = user_stake
+        .checked_mul(losing_pool_net)
+        .expect("payout multiplication overflow")
+        / winning_pool;
+
+    let net_payout = user_stake
+        .checked_add(share)
+        .expect("payout addition overflow");
+
+    (net_payout, protocol_fee, creator_fee)
+}
+
 #[contract]
 pub struct OutcomeManagerContract;
 
