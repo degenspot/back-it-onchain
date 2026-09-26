@@ -105,6 +105,74 @@ export const validationSchema = Joi.object({
   // Max number of due calls resolved per resolveDueCalls() sweep.
   ORACLE_RESOLUTION_BATCH_SIZE: Joi.number().integer().min(1).default(20),
 
+  // ── Price staleness guard (BE-018) ───────────────────────────────────────
+  // A quote older than this (in seconds) can no longer settle a call.
+  ORACLE_MAX_PRICE_AGE_SECONDS: Joi.number()
+    .integer()
+    .min(1)
+    .default(600),
+  // A market trading under this much in 24 h can no longer settle a call: the
+  // quoted price is real but not executable, and is easier to move.
+  ORACLE_MIN_24H_VOLUME_USD: Joi.number().min(0).default(1000),
+
+  // ── Disputes (BE-019) ────────────────────────────────────────────────────
+  // Bond required to open or back a dispute. The spam guard: filing a dispute
+  // has to cost something.
+  DISPUTE_MIN_BOND: Joi.string().default('10'),
+  // Aggregate stake that escalates a dispute to the governance multisig.
+  DISPUTE_STAKE_THRESHOLD: Joi.string().default('100'),
+  // Hours after settlement during which disputes may be lodged.
+  DISPUTE_WINDOW_HOURS: Joi.number().integer().min(1).default(24),
+  // Hours governance has to reach a decision once escalated.
+  DISPUTE_VOTE_DURATION_HOURS: Joi.number().integer().min(1).default(48),
+  // Approvals required to decide an escalated dispute.
+  DISPUTE_GOVERNANCE_QUORUM: Joi.number().integer().min(1).default(3),
+  // Comma-separated wallets that form the governance multisig. Empty means no
+  // one can vote, so every dispute expires to CONFIRMED — the safe direction.
+  GOVERNANCE_SIGNERS: Joi.string().allow('').default(''),
+
+  // ── Ledger-aware scheduling (BE-020) ─────────────────────────────────────
+  // Weight of the newest close sample in the velocity EMA. Higher reacts
+  // faster to a change in network conditions; lower is steadier.
+  LEDGER_VELOCITY_EMA_ALPHA: Joi.number().min(0.01).max(1).default(0.3),
+  // Extra delay past the estimated close, covering the gap between a ledger
+  // closing and the RPC reporting it closed.
+  LEDGER_CLOSE_SETTLE_MS: Joi.number().integer().min(0).default(2000),
+  // How often to sample ledger velocity.
+  LEDGER_VELOCITY_SYNC_MS: Joi.number().integer().min(1000).default(15000),
+  // How often a fired job re-checks whether its target ledger has closed.
+  LEDGER_CONFIRM_POLL_MS: Joi.number().integer().min(100).default(1000),
+  // How long to keep polling for a ledger before giving up and leaving the call
+  // to the ordinary sweep.
+  LEDGER_CONFIRM_TIMEOUT_MS: Joi.number().integer().min(1000).default(120000),
+  // Re-time a pending job only if the drift exceeds this, so ordinary velocity
+  // noise does not rewrite the queue.
+  LEDGER_RETIME_THRESHOLD_MS: Joi.number().integer().min(0).default(1000),
+  // How close to expiry a call's target ledger stops being re-derived. 0 means
+  // "two ledger intervals", which is what makes the ±1 guarantee hold: a target
+  // chosen six hours out on a rough velocity estimate is hundreds of ledgers
+  // wrong, while one chosen two intervals out is good to a fraction of one.
+  LEDGER_TARGET_LOCK_LEAD_SECONDS: Joi.number().integer().min(0).default(0),
+  // How far ahead of expiry a call is given a target ledger.
+  LEDGER_SCHEDULE_HORIZON_HOURS: Joi.number().integer().min(1).default(6),
+  // Cap on calls armed per sweep.
+  LEDGER_SCHEDULE_BATCH_SIZE: Joi.number().integer().min(1).default(200),
+
+  // ── WebSocket gateway (BE-021) ───────────────────────────────────────────
+  // Comma-separated origins allowed to open a socket. Empty denies all, which
+  // is the safe default: a wildcard origin with credentials would let any site
+  // open an authenticated socket as the user.
+  WS_CORS_ORIGIN: Joi.string().allow('').default(''),
+  // Connection attempts allowed per IP per window. Guards the 10k connection
+  // budget against a single source opening thousands of sockets.
+  WS_IP_CONNECT_LIMIT: Joi.number().integer().min(1).default(20),
+  WS_IP_WINDOW_MS: Joi.number().integer().min(1000).default(60000),
+  // Whether x-forwarded-for may be trusted for the per-IP limit. Turn off when
+  // the app is exposed directly with no proxy in front of it.
+  WS_TRUST_PROXY: Joi.boolean().default(true),
+  // Max idle sockets per instance, tuned for the 10k concurrent target.
+  WS_MAX_CONNECTIONS: Joi.number().integer().min(1).default(10000),
+
   // ── Indexer (Base / Base Sepolia) — BE-05 ────────────────────────────────
   BASE_RPC_URL: Joi.string()
     .uri({ scheme: ['http', 'https'] })

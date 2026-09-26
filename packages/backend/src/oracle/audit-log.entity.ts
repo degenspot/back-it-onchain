@@ -14,6 +14,16 @@ import {
 export enum AuditLogAction {
   ORACLE_SETTLEMENT = 'oracle.settlement',
   ORACLE_UNRESOLVED = 'oracle.unresolved',
+  /** BE-018: a call frozen because its price was stale or untradeable. */
+  ORACLE_RESOLUTION_HALTED = 'oracle.resolution_halted',
+  /** BE-018: an admin returned a frozen call to the resolution queue. */
+  ORACLE_RESOLUTION_UNFROZEN = 'oracle.resolution_unfrozen',
+
+  // ── Disputes (BE-019) ───────────────────────────────────────────────────
+  DISPUTE_RAISED = 'dispute.raised',
+  DISPUTE_ESCALATED = 'dispute.escalated',
+  DISPUTE_OVERTURNED = 'dispute.overturned',
+  DISPUTE_CONFIRMED = 'dispute.confirmed',
   ORACLE_KEY_ROTATED = 'oracle.key_rotated',
 }
 

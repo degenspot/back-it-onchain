@@ -13,15 +13,28 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import { CallsService, CallStatus } from './calls.service';
 import { Call } from './call.entity';
+import { DisputeService } from './dispute.service';
 import { AdminService } from '../admin/admin.service';
 import { CallsQueryDto } from './dto/calls-query.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+
+/** Body for POST /calls/:id/dispute (BE-019). */
+export class RaiseDisputeDto {
+  /** The argument for disputing, in prose. */
+  claim!: string;
+  /** Bond staked, as a decimal string. Never a JSON number: 18-decimal values
+   *  do not survive `JSON.parse` intact. */
+  bondAmount!: string;
+  /** IPFS CID of the full claim document. */
+  claimCid?: string;
+}
 
 @Controller('calls')
 export class CallsController {
   constructor(
     private readonly callsService: CallsService,
     private readonly adminService: AdminService,
+    private readonly disputeService: DisputeService,
   ) {}
 
   @Throttle({ wallet: { limit: 10, ttl: 1 * 60000 } })
@@ -89,20 +102,36 @@ export class CallsController {
     return this.callsService.calculatePayouts(+id, feeBps);
   }
 
-  // ── Issue #302: dispute endpoints ─────────────────────────────────────────
+  // ── Dispute endpoints (BE-019) ───────────────────────────────────────────
 
+  /**
+   * POST /calls/:id/dispute
+   * Lodge a dispute against a settled call, or back one already open.
+   *
+   * Body: { claim: string, bondAmount: string, claimCid?: string }
+   *
+   * Throttled harder than ordinary writes: a dispute is a paid action, and the
+   * rate limit is the cheapest thing standing between the endpoint and a
+   * script that files a thousand of them.
+   */
   @UseGuards(JwtAuthGuard)
+  @Throttle({ wallet: { limit: 5, ttl: 60 * 60000 } })
   @Post(':id/dispute')
   raiseDispute(
-    @Param('id') id: string,
-    @Body('bondAmount') bondAmount: number,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: RaiseDisputeDto,
     @Request() req: any,
   ) {
-    return this.callsService.raiseDispute(+id, req.user.wallet, bondAmount);
+    return this.disputeService.raiseDispute(id, {
+      raiserWallet: req.user.wallet,
+      claim: body.claim,
+      bondAmount: body.bondAmount,
+      claimCid: body.claimCid,
+    });
   }
 
   @Get(':id/disputes')
-  getDisputes(@Param('id') id: string) {
-    return this.callsService.findDisputesByCall(+id);
+  getDisputes(@Param('id', ParseIntPipe) id: number) {
+    return this.disputeService.findByCall(id);
   }
 }

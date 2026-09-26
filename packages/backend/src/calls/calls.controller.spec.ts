@@ -1,5 +1,6 @@
 import { CallsController } from './calls.controller';
 import { CallsService } from './calls.service';
+import { DisputeService } from './dispute.service';
 import { AdminService } from '../admin/admin.service';
 
 describe('CallsController', () => {
@@ -18,6 +19,7 @@ describe('CallsController', () => {
   const controller = new CallsController(
     callsService as unknown as CallsService,
     adminService as unknown as AdminService,
+    { raiseDispute: jest.fn() } as unknown as DisputeService,
   );
 
   afterEach(() => {
