@@ -1,9 +1,15 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
+import { ethers } from 'ethers';
 import { OracleService } from './oracle.service';
 import { Keypair } from '@stellar/stellar-sdk';
 import { AdminService } from '../admin/admin.service';
 import { AuditLog, AuditLogAction } from './audit-log.entity';
+import {
+  InMemoryQuorumTransport,
+  QuorumConsensusService,
+  ResolutionPayload,
+} from './quorum-consensus.service';
 
 describe('OracleService', () => {
   let service: OracleService;
@@ -1023,9 +1029,13 @@ describe('OracleService', () => {
 
   describe('Price fallback chain: DexScreener -> GeckoTerminal (BE-01)', () => {
     let originalFetch: typeof global.fetch;
+    let originalSetTimeout: typeof global.setTimeout;
+    let originalAbortSignalTimeout: typeof AbortSignal.timeout;
 
     beforeEach(() => {
       originalFetch = global.fetch;
+      originalAbortSignalTimeout = (AbortSignal as any).timeout;
+      originalSetTimeout = global.setTimeout;
       (AbortSignal as any).timeout = () => new AbortController().signal;
       (global as any).setTimeout = (cb: any) => {
         cb();
@@ -1035,6 +1045,12 @@ describe('OracleService', () => {
 
     afterEach(() => {
       global.fetch = originalFetch;
+      // Restore the timers too: the immediate-fire stub left in place makes
+      // every later test's `setTimeout` run at once, so anything that waits on
+      // a deadline (a quorum round, a retry backoff) sees a timeout it never
+      // actually waited for.
+      (global as any).setTimeout = originalSetTimeout;
+      (AbortSignal as any).timeout = originalAbortSignalTimeout;
     });
 
     it('uses DexScreener when it succeeds, never calling GeckoTerminal', async () => {
@@ -1170,12 +1186,24 @@ describe('OracleService', () => {
       return svc;
     }
 
+    let originalSetTimeout: typeof global.setTimeout;
+    let originalAbortSignalTimeout: typeof AbortSignal.timeout;
+
     beforeEach(() => {
+      originalSetTimeout = global.setTimeout;
+      originalAbortSignalTimeout = (AbortSignal as any).timeout;
       (AbortSignal as any).timeout = () => new AbortController().signal;
       (global as any).setTimeout = (cb: any) => {
         cb();
         return 0;
       };
+    });
+
+    afterEach(() => {
+      // The stub has to come back out of the global object, or the next
+      // describe inherits an immediate-fire `setTimeout`.
+      (global as any).setTimeout = originalSetTimeout;
+      (AbortSignal as any).timeout = originalAbortSignalTimeout;
     });
 
     it('settles a due call: fetches price, pins evidence, signs, emits oracle.settlement', async () => {
@@ -1256,6 +1284,213 @@ describe('OracleService', () => {
       const results = await svc.resolveDueCalls(5);
       expect(results).toEqual([]);
       expect(mocks.eventEmitterMock.emit).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── BE-017: resolution goes through M-of-N consensus before signing ───────
+
+  describe('quorum-assisted outcome signing', () => {
+    const CHANNEL = 'oracle:resolution:test';
+    const OUTCOME_MANAGER_ADDRESS =
+      '0x00000000000000000000000000000000000000aa';
+    const ORACLE_KEY =
+      '0x1234567890123456789012345678901234567890123456789012345678901234';
+    const NODE_KEYS = [
+      '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d',
+      '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a',
+      '0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6',
+    ];
+
+    const EXPECTED_TYPES = {
+      Outcome: [
+        { name: 'callId', type: 'uint256' },
+        { name: 'outcome', type: 'bool' },
+        { name: 'finalPrice', type: 'uint256' },
+        { name: 'timestamp', type: 'uint256' },
+      ],
+    };
+
+    function configWith(extra: Record<string, unknown> = {}) {
+      const values: Record<string, unknown> = {
+        STELLAR_ORACLE_SECRET_KEY: TEST_SECRET_KEY,
+        ORACLE_PRIVATE_KEY: ORACLE_KEY,
+        OUTCOME_MANAGER_ADDRESS,
+        ORACLE_QUORUM_THRESHOLD: '2',
+        ORACLE_QUORUM_TIMEOUT_MS: '150',
+        ORACLE_QUORUM_CHANNEL: CHANNEL,
+        ...extra,
+      };
+      const get = jest.fn(
+        (key: string, def?: unknown) => values[key] ?? def ?? null,
+      );
+      return { get } as unknown as ConfigService;
+    }
+
+    async function buildOracle(quorum?: QuorumConsensusService) {
+      const moduleRef: TestingModule = await Test.createTestingModule({
+        providers: [
+          OracleService,
+          { provide: ConfigService, useValue: configWith() },
+          {
+            provide: AdminService,
+            useValue: { isPaused: jest.fn(() => false) },
+          },
+          ...(quorum
+            ? [{ provide: QuorumConsensusService, useValue: quorum }]
+            : []),
+        ],
+      }).compile();
+
+      return moduleRef.get<OracleService>(OracleService);
+    }
+
+    /** A simulated peer: signs whatever payload the round asks about. */
+    async function joinNode(
+      transport: InMemoryQuorumTransport,
+      sign: (
+        payload: ResolutionPayload,
+      ) => Promise<string | null> | string | null,
+    ): Promise<() => Promise<void>> {
+      return transport.subscribe(CHANNEL, async (message: unknown) => {
+        const request = message as {
+          type?: string;
+          roundId?: string;
+          payload?: ResolutionPayload;
+        };
+        if (
+          request?.type !== 'resolution-request' ||
+          !request.payload ||
+          !request.roundId
+        ) {
+          return;
+        }
+        const signature = await sign(request.payload);
+        if (!signature) return;
+        await transport.publish(CHANNEL, {
+          type: 'resolution-vote',
+          roundId: request.roundId,
+          signature,
+        });
+      });
+    }
+
+    it('refuses to sign when no consensus engine is wired', async () => {
+      const svc = await buildOracle();
+
+      const result = await svc.signOutcomeWithQuorum(7, true, 1250, 1_760_000_000);
+
+      expect(result.converged).toBe(false);
+      expect(result.reason).toBe('no-quorum-service');
+      expect(result.signature).toBeUndefined();
+    });
+
+    it('does not sign when no node has registered', async () => {
+      const transport = new InMemoryQuorumTransport();
+      const quorum = new QuorumConsensusService(configWith(), transport);
+      const svc = await buildOracle(quorum);
+
+      const result = await svc.signOutcomeWithQuorum(7, true, 1250, 1_760_000_000);
+
+      expect(result.converged).toBe(false);
+      expect(result.reason).toBe('no-nodes');
+      expect(result.signature).toBeUndefined();
+    });
+
+    it('signs only after M of N nodes agree, and returns the aggregate with the latency', async () => {
+      const transport = new InMemoryQuorumTransport();
+      // A generous round deadline: the assertions are about consensus, not about
+      // how fast three in-process nodes answer under a loaded test runner.
+      const quorum = new QuorumConsensusService(
+        configWith({ ORACLE_QUORUM_TIMEOUT_MS: '2000' }),
+        transport,
+      );
+      const wallets = NODE_KEYS.map((key) => new ethers.Wallet(key));
+      quorum.registerNodes(wallets.map((wallet) => wallet.address));
+      const svc = await buildOracle(quorum);
+
+      const releases: Array<() => Promise<void>> = [];
+      for (const wallet of wallets) {
+        releases.push(
+          await joinNode(transport, (payload) =>
+            wallet.signTypedData(
+              payload.domain,
+              payload.types,
+              payload.value,
+            ),
+          ),
+        );
+      }
+
+      try {
+        const result = await svc.signOutcomeWithQuorum(
+          7,
+          true,
+          1250,
+          1_760_000_000,
+        );
+
+        expect(result.converged).toBe(true);
+        expect(result.signers?.length).toBeGreaterThanOrEqual(2);
+        expect(result.aggregate).toBeTruthy();
+        expect(result.latencyMs).toBeGreaterThanOrEqual(0);
+
+        // The signature is over the same payload the nodes voted on.
+        const recovered = ethers.verifyTypedData(
+          {
+            name: 'OnChainSageOutcome',
+            version: '1',
+            chainId: 84532,
+            verifyingContract: OUTCOME_MANAGER_ADDRESS,
+          },
+          EXPECTED_TYPES,
+          { callId: 7, outcome: true, finalPrice: 1250, timestamp: 1_760_000_000 },
+          result.signature as string,
+        );
+        expect(recovered).toBe(new ethers.Wallet(ORACLE_KEY).address);
+      } finally {
+        for (const release of releases) await release();
+      }
+    });
+
+    it('aborts without signing when a node deviates from the payload', async () => {
+      const transport = new InMemoryQuorumTransport();
+      const quorum = new QuorumConsensusService(
+        configWith({ ORACLE_QUORUM_THRESHOLD: '2' }),
+        transport,
+      );
+      const honest = new ethers.Wallet(NODE_KEYS[0]);
+      const deviating = new ethers.Wallet(NODE_KEYS[1]);
+      quorum.registerNodes([honest.address, deviating.address]);
+      const svc = await buildOracle(quorum);
+
+      const releases = [
+        await joinNode(transport, (payload) =>
+          honest.signTypedData(payload.domain, payload.types, payload.value),
+        ),
+        // Same round, different outcome: the vote must not count.
+        await joinNode(transport, (payload) =>
+          deviating.signTypedData(payload.domain, payload.types, {
+            ...payload.value,
+            finalPrice: 999_999,
+          }),
+        ),
+      ];
+
+      try {
+        const result = await svc.signOutcomeWithQuorum(
+          7,
+          true,
+          1250,
+          1_760_000_000,
+        );
+
+        expect(result.converged).toBe(false);
+        expect(result.reason).toBe('timeout');
+        expect(result.signature).toBeUndefined();
+        expect(result.rejections?.length).toBeGreaterThanOrEqual(1);
+      } finally {
+        for (const release of releases) await release();
+      }
     });
   });
 });

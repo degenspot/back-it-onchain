@@ -7,6 +7,11 @@ import { AdminModule } from '../admin/admin.module';
 import { IpfsModule } from '../ipfs/ipfs.module';
 import { Call } from '../calls/call.entity';
 import { AuditLog } from './audit-log.entity';
+import {
+  InMemoryQuorumTransport,
+  QUORUM_TRANSPORT,
+  QuorumConsensusService,
+} from './quorum-consensus.service';
 
 @Module({
   imports: [
@@ -16,7 +21,16 @@ import { AuditLog } from './audit-log.entity';
     TypeOrmModule.forFeature([Call, AuditLog]),
   ],
   controllers: [OracleController],
-  providers: [OracleService],
-  exports: [OracleService],
+  providers: [
+    OracleService,
+    QuorumConsensusService,
+    // BE-017: the transport is a seam, not a dependency. This default keeps
+    // every node in one process (dev and tests). A deployment with independent
+    // nodes overrides QUORUM_TRANSPORT with a RedisPubSubTransport built on its
+    // own client, e.g.:
+    //   { provide: QUORUM_TRANSPORT, useValue: new RedisPubSubTransport(client.duplicate()) }
+    { provide: QUORUM_TRANSPORT, useClass: InMemoryQuorumTransport },
+  ],
+  exports: [OracleService, QuorumConsensusService],
 })
 export class OracleModule {}

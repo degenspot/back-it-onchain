@@ -16,6 +16,10 @@ import { IpfsService } from '../ipfs/ipfs.service';
 import { Call } from '../calls/call.entity';
 import { AuditLog, AuditLogAction } from './audit-log.entity';
 import { IKeySigner, LocalWalletSigner, KmsSigner } from './key-signer';
+import {
+  QuorumConsensusService,
+  ResolutionPayload,
+} from './quorum-consensus.service';
 
 // ─── Retry configuration ────────────────────────────────────────────────────
 
@@ -199,6 +203,32 @@ export interface ResolutionResult {
   oracleSignature?: string;
 }
 
+/**
+ * What a quorum-assisted signing attempt produced (BE-017).
+ *
+ * On `converged: false` nothing is signed: the caller aborts the submission
+ * rather than sending a signature the other nodes did not agree to.
+ */
+export interface QuorumOutcomeResult {
+  converged: boolean;
+  /** The aggregated signature set, present only when the threshold was reached. */
+  signature?: string;
+  aggregate?: string;
+  signers?: string[];
+  signatures?: string[];
+  payloadHash?: string;
+  threshold?: number;
+  nodeCount?: number;
+  latencyMs?: number;
+  reason?:
+    | 'timeout'
+    | 'no-nodes'
+    | 'no-transport'
+    | 'no-quorum-service'
+    | 'unknown';
+  rejections?: { reason: string; signature: string; detail?: string }[];
+}
+
 // ─── Service ────────────────────────────────────────────────────────────────
 
 @Injectable()
@@ -223,6 +253,12 @@ export class OracleService {
     @InjectRepository(AuditLog)
     private readonly auditLogRepository?: Repository<AuditLog>,
     @Optional() private readonly dataSource?: DataSource,
+    /**
+     * BE-017: the M-of-N consensus engine. Optional so the service keeps
+     * working in a single-node deployment; `signOutcomeWithQuorum` refuses to
+     * sign when it is absent rather than pretending consensus happened.
+     */
+    @Optional() private readonly quorum?: QuorumConsensusService,
   ) {
     const privateKey = this.configService.get<string>('ORACLE_PRIVATE_KEY');
     if (privateKey) {
@@ -781,27 +817,123 @@ export class OracleService {
     }
     if (!this.signer) throw new Error('Oracle signer not configured');
 
-    const domain = {
-      name: 'OnChainSageOutcome',
-      version: '1',
-      chainId: 84532, // Base Sepolia
-      verifyingContract: this.configService.get<string>(
-        'OUTCOME_MANAGER_ADDRESS',
-      ),
+    const payload = this.outcomeTypedData(
+      callId,
+      outcome,
+      finalPrice,
+      timestamp,
+    );
+
+    return this.signer.signTypedData(
+      payload.domain,
+      payload.types,
+      payload.value,
+    );
+  }
+
+  /**
+   * The EIP-712 payload a resolution outcome is signed over.
+   *
+   * One builder for both signing paths: the single-signer `signOutcome` and the
+   * M-of-N round in `signOutcomeWithQuorum` have to agree on exactly the bytes
+   * they ask the node set to sign, or a vote would verify against a different
+   * payload than the one this node submits.
+   */
+  private outcomeTypedData(
+    callId: number,
+    outcome: boolean,
+    finalPrice: number,
+    timestamp: number,
+  ): ResolutionPayload {
+    return {
+      domain: {
+        name: 'OnChainSageOutcome',
+        version: '1',
+        chainId: 84532, // Base Sepolia
+        verifyingContract: this.configService.get<string>(
+          'OUTCOME_MANAGER_ADDRESS',
+        ),
+      },
+      types: {
+        Outcome: [
+          { name: 'callId', type: 'uint256' },
+          { name: 'outcome', type: 'bool' },
+          { name: 'finalPrice', type: 'uint256' },
+          { name: 'timestamp', type: 'uint256' },
+        ],
+      },
+      value: { callId, outcome, finalPrice, timestamp },
     };
+  }
 
-    const types = {
-      Outcome: [
-        { name: 'callId', type: 'uint256' },
-        { name: 'outcome', type: 'bool' },
-        { name: 'finalPrice', type: 'uint256' },
-        { name: 'timestamp', type: 'uint256' },
-      ],
+  /**
+   * BE-017: agree an outcome with the peer oracle nodes before signing it.
+   *
+   * The round asks every registered node to sign the same EIP-712 payload this
+   * node is about to sign; once M verified, distinct votes are in, the outcome
+   * is signed here and returned together with the aggregated signature set the
+   * contract submission needs. When the nodes do not reach the threshold the
+   * call is **not** signed — a resolution that only this node agreed to is
+   * worse than a resolution that waits, and the round never throws, so a
+   * silent node cannot stall the pipeline (it shows up as `reason: 'timeout'`).
+   */
+  async signOutcomeWithQuorum(
+    callId: number,
+    outcome: boolean,
+    finalPrice: number,
+    timestamp: number,
+    overrides: { timeoutMs?: number; threshold?: number } = {},
+  ): Promise<QuorumOutcomeResult> {
+    const payload = this.outcomeTypedData(
+      callId,
+      outcome,
+      finalPrice,
+      timestamp,
+    );
+
+    if (!this.quorum) {
+      this.logger.warn(
+        `call ${callId}: quorum consensus is not wired, refusing to sign an unagreed outcome`,
+      );
+      return { converged: false, reason: 'no-quorum-service' };
+    }
+
+    const result = await this.quorum.resolve(payload, overrides);
+    if (!result.converged) {
+      this.logger.warn(
+        `call ${callId}: no quorum after ${result.latencyMs}ms (${result.signers.length}/${result.threshold} verified votes, reason: ${result.reason ?? 'unknown'})`,
+      );
+      return {
+        converged: false,
+        reason: result.reason ?? 'unknown',
+        latencyMs: result.latencyMs,
+        signers: result.signers,
+        rejections: result.rejections,
+      };
+    }
+
+    const signature = await this.signOutcome(
+      callId,
+      outcome,
+      finalPrice,
+      timestamp,
+    );
+
+    this.logger.log(
+      `call ${callId}: quorum reached in ${result.latencyMs}ms (${result.signers.length}/${result.threshold} nodes, payload ${result.payloadHash})`,
+    );
+
+    return {
+      converged: true,
+      signature,
+      aggregate: result.aggregate,
+      signers: result.signers,
+      signatures: result.signatures,
+      payloadHash: result.payloadHash,
+      threshold: result.threshold,
+      nodeCount: result.nodeCount,
+      latencyMs: result.latencyMs,
     };
-
-    const value = { callId, outcome, finalPrice, timestamp };
-
-    return this.signer.signTypedData(domain, types, value);
   }
 
   // ─── Stellar (ed25519) signing ────────────────────────────────────────────
