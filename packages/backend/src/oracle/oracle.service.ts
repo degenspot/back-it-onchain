@@ -1,10 +1,12 @@
 import {
   Injectable,
   Logger,
+  OnModuleInit,
   Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Interval } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -20,6 +22,12 @@ import {
   QuorumConsensusService,
   ResolutionPayload,
 } from './quorum-consensus.service';
+import {
+  PriceFreshness,
+  PriceStalenessService,
+  StalenessViolation,
+} from './price-staleness.service';
+import { LedgerSchedulerService } from './ledger-scheduler.service';
 
 // ─── Retry configuration ────────────────────────────────────────────────────
 
@@ -163,6 +171,12 @@ interface GeckoTerminalResponse {
   data?: {
     attributes?: {
       token_prices?: Record<string, string>;
+      /**
+       * ISO timestamp of the quoted price. DexScreener's token-pairs endpoint
+       * has no equivalent, which is why PriceStalenessService also tracks
+       * price change locally.
+       */
+      updated_at?: string;
     };
   };
 }
@@ -196,11 +210,13 @@ export interface EvidencePayload {
 
 export interface ResolutionResult {
   callId: number;
-  status: 'SETTLED' | 'UNRESOLVED';
+  status: 'SETTLED' | 'UNRESOLVED' | 'RESOLUTION_HALTED';
   outcome?: boolean;
   finalPrice?: number;
   evidenceCid?: string;
   oracleSignature?: string;
+  /** Populated when the call was frozen (BE-018). */
+  haltedReason?: string;
 }
 
 /**
@@ -232,7 +248,7 @@ export interface QuorumOutcomeResult {
 // ─── Service ────────────────────────────────────────────────────────────────
 
 @Injectable()
-export class OracleService {
+export class OracleService implements OnModuleInit {
   private readonly logger = new Logger(OracleService.name);
 
   private signer: ethers.Wallet;
@@ -259,6 +275,18 @@ export class OracleService {
      * sign when it is absent rather than pretending consensus happened.
      */
     @Optional() private readonly quorum?: QuorumConsensusService,
+    /**
+     * BE-018: the staleness guard. Optional so existing deployments and tests
+     * keep resolving; when present, a call is frozen rather than settled on a
+     * price that is stale or untradeable.
+     */
+    @Optional() private readonly priceStaleness?: PriceStalenessService,
+    /**
+     * BE-020: ledger-aware expiry scheduling. Optional so a deployment without
+     * the scheduler falls back to the interval sweep below rather than
+     * silently never resolving.
+     */
+    @Optional() private readonly ledgerScheduler?: LedgerSchedulerService,
   ) {
     const privateKey = this.configService.get<string>('ORACLE_PRIVATE_KEY');
     if (privateKey) {
@@ -284,7 +312,118 @@ export class OracleService {
     }
   }
 
-  // ─── Public key helpers ───────────────────────────────────────────────────
+  // ─── Ledger-aware scheduling (BE-020) ────────────────────────────────────
+
+  async onModuleInit(): Promise<void> {
+    if (!this.ledgerScheduler) return;
+
+    // The scheduler owns *when*; this service still owns *what*. Handing it the
+    // existing sweep means a closed ledger resolves exactly the calls the
+    // ordinary path would have, and the safety checks inside are unchanged.
+    this.ledgerScheduler.setDueHandler(async () => {
+      await this.resolveDueCalls();
+    });
+
+    // The in-process queue is not durable, so a restart would otherwise forget
+    // every pending target. Re-arm from the database instead.
+    await this.armUpcomingCalls();
+  }
+
+  /**
+   * Give every call that is approaching its expiry a target ledger.
+   *
+   * Runs on boot and on an interval, because a call created after startup still
+   * needs arming, and because the horizon means a call is always picked up well
+   * before it is due.
+   */
+  @Interval('oracle-ledger-arm', 60_000)
+  async armUpcomingCalls(): Promise<number> {
+    if (!this.ledgerScheduler || !this.callRepository) return 0;
+
+    const horizonHours = this.configService.get<number>(
+      'LEDGER_SCHEDULE_HORIZON_HOURS',
+      6,
+    );
+    const limit = this.configService.get<number>(
+      'LEDGER_SCHEDULE_BATCH_SIZE',
+      200,
+    );
+    const until = new Date(Date.now() + horizonHours * 60 * 60 * 1_000);
+
+    const upcoming = await this.callRepository.find({
+      where: { status: 'OPEN' },
+      order: { endTs: 'ASC' },
+      take: limit,
+    });
+
+    let armed = 0;
+    for (const call of upcoming) {
+      const endTsMs = new Date(call.endTs).getTime();
+      if (!Number.isFinite(endTsMs)) continue;
+      if (new Date(call.endTs) > until) continue;
+      // null means the scheduler had no ledger to anchor a target to. The call
+      // is not armed, but it is also not lost: the due-call sweep still
+      // resolves it, and the next arm pass will get a real target.
+      const scheduled = await this.ledgerScheduler.scheduleCall(
+        call.id,
+        endTsMs,
+      );
+      if (scheduled) armed += 1;
+    }
+    return armed;
+  }
+
+  /**
+   * Safety net for calls the ledger scheduler did not resolve.
+   *
+   * The scheduler has deliberate failure paths: it declines to arm a call when
+   * no ledger has been observed, and it gives up on a call whose target ledger
+   * has not closed within `LEDGER_CONFIRM_TIMEOUT_MS`. Without a fallback those
+   * calls would sit at OPEN forever, because the scheduler is otherwise the only
+   * automatic resolution path.
+   *
+   * It is a sweep rather than a second scheduler on purpose: it resolves
+   * whatever is past `endTs` and nothing else. Precision is lost — this path
+   * cannot target a ledger — but BE-018's staleness guard runs inside
+   * `resolveOneCall` either way, so a call lands here on bad data is frozen
+   * rather than settled. Precision is a scheduling nicety; settling on a stale
+   * price is the actual harm.
+   *
+   * Running alongside the scheduler is safe: `resolveDueCalls` claims rows with
+   * `FOR UPDATE SKIP LOCKED` and flips them to SETTLING before doing any work,
+   * so the two paths cannot settle the same call.
+   */
+  @Interval('oracle-due-sweep', 60_000)
+  async sweepDueCalls(): Promise<number> {
+    if (!this.ledgerScheduler) {
+      // No scheduler wired up: this sweep is the only resolution path there is,
+      // so it has to run.
+      return this.runDueSweep();
+    }
+    const results = await this.runDueSweep();
+    if (results > 0) {
+      this.logger.warn(
+        `${results} due call(s) resolved by the fallback sweep rather than ` +
+          'the ledger scheduler',
+      );
+    }
+    return results;
+  }
+
+  private async runDueSweep(): Promise<number> {
+    if (!this.dataSource || !this.callRepository) return 0;
+    try {
+      const results = await this.resolveDueCalls();
+      return results.length;
+    } catch (err) {
+      this.logger.error(
+        `Due-call sweep failed: ${(err as Error).message}`,
+      );
+      return 0;
+    }
+  }
+
+  // ─── Public key helpers ────────────────────────────────────────────────────
 
   /**
    * Get the Stellar public key for contract authorization.
@@ -299,23 +438,25 @@ export class OracleService {
   // ─── Price fetching ───────────────────────────────────────────────────────
 
   /**
-   * Fetches the USD price for a token via the DexScreener API.
+   * Fetches a price *and* the evidence needed to judge whether it can settle a
+   * market (BE-018).
+   *
+   * DexScreener reports 24h volume but no observation time, so the timestamp is
+   * left undefined and `PriceStalenessService` falls back to locally-observed
+   * price change.
    *
    * Retried automatically with exponential backoff:
    *   attempt 1 → immediate
    *   attempt 2 → ~1 s
    *   attempt 3 → ~2 s
    *   attempt 4 → ~4 s → throws RpcExhaustedError
-   *
-   * Logs a warning on each failed attempt and only throws after all
-   * attempts are exhausted.
    */
   @Retryable({
     maxAttempts: 4,
     baseDelayMs: 1_000,
     operationName: 'oracle:fetchPrice',
   })
-  async fetchPrice(tokenAddress: string): Promise<number> {
+  async fetchQuote(tokenAddress: string): Promise<PriceFreshness> {
     this.logger.log(`Fetching price for ${tokenAddress}`);
 
     const url = `https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`;
@@ -346,7 +487,22 @@ export class OracleService {
         `(${pair.baseToken.symbol}, 24h vol: $${pair.volume.h24})`,
     );
 
-    return price;
+    return {
+      price,
+      volume24h: pair.volume?.h24,
+      source: 'dexscreener',
+    };
+  }
+
+  /**
+   * Fetches the USD price for a token via the DexScreener API.
+   *
+   * Thin wrapper over {@link fetchQuote} for callers that only need the number.
+   * The retry policy lives on `fetchQuote` so both entry points get it.
+   */
+  async fetchPrice(tokenAddress: string): Promise<number> {
+    const quote = await this.fetchQuote(tokenAddress);
+    return quote.price;
   }
 
   /**
@@ -370,18 +526,20 @@ export class OracleService {
   }
 
   /**
-   * Fetches the USD price for a token via GeckoTerminal's simple price API.
-   * Used as the fallback fetcher when DexScreener is unavailable (BE-01).
+   * GeckoTerminal quote, with the API's own `updated_at` as freshness evidence.
+   *
+   * GeckoTerminal's simple-price endpoint reports no volume, so the liquidity
+   * check falls back to failing closed when this feed is the only one left.
    */
   @Retryable({
     maxAttempts: 3,
     baseDelayMs: 1_000,
     operationName: 'oracle:fetchFromGeckoTerminal',
   })
-  async fetchFromGeckoTerminal(
+  async fetchGeckoQuote(
     tokenAddress: string,
     network?: string,
-  ): Promise<number> {
+  ): Promise<PriceFreshness> {
     const net =
       network ??
       this.configService.get<string>('GECKOTERMINAL_NETWORK', 'base');
@@ -409,27 +567,52 @@ export class OracleService {
     }
 
     const price = parseFloat(raw);
+    // An unparseable updated_at is dropped rather than turned into NaN, so the
+    // staleness check falls back to price-change evidence instead of
+    // comparing against a non-finite timestamp.
+    const updatedAtRaw = data?.data?.attributes?.updated_at;
+    const updatedAt = updatedAtRaw
+      ? Date.parse(updatedAtRaw)
+      : Number.NaN;
+
     this.logger.log(
-      `GeckoTerminal fallback price for ${tokenAddress}: $${price}`,
+      `GeckoTerminal fallback price for ${tokenAddress}: $${price}` +
+        (Number.isFinite(updatedAt) ? ` (as of ${updatedAtRaw})` : ''),
     );
-    return price;
+
+    return {
+      price,
+      timestamp: Number.isFinite(updatedAt) ? updatedAt : undefined,
+      source: 'geckoterminal',
+    };
   }
 
   /**
-   * DexScreener → GeckoTerminal fallback chain (BE-01).
+   * Fetches the USD price for a token via GeckoTerminal's simple price API.
+   * Used as the fallback fetcher when DexScreener is unavailable (BE-01).
+   */
+  async fetchFromGeckoTerminal(
+    tokenAddress: string,
+    network?: string,
+  ): Promise<number> {
+    const quote = await this.fetchGeckoQuote(tokenAddress, network);
+    return quote.price;
+  }
+
+  /**
+   * DexScreener → GeckoTerminal fallback chain (BE-01, extended BE-018).
    *
-   * Tries DexScreener first (already retried internally by @Retryable).
-   * If DexScreener's retries are exhausted, falls back to GeckoTerminal
-   * (also retried). Only throws PriceFeedOutageError once *both* feeds
+   * Returns the price together with the evidence needed to judge whether it
+   * may settle a market. Only throws PriceFeedOutageError once *both* feeds
    * are exhausted, which callers should treat as an UNRESOLVED signal.
    */
   async fetchPriceWithFallback(
     tokenAddress: string,
     network?: string,
-  ): Promise<{ price: number; source: 'dexscreener' | 'geckoterminal' }> {
+  ): Promise<PriceFreshness & { source: 'dexscreener' | 'geckoterminal' }> {
     try {
-      const price = await this.fetchPrice(tokenAddress);
-      return { price, source: 'dexscreener' };
+      const quote = await this.fetchQuote(tokenAddress);
+      return { ...quote, source: 'dexscreener' };
     } catch (dexErr) {
       const dexError =
         dexErr instanceof Error ? dexErr : new Error(String(dexErr));
@@ -438,8 +621,8 @@ export class OracleService {
       );
 
       try {
-        const price = await this.fetchFromGeckoTerminal(tokenAddress, network);
-        return { price, source: 'geckoterminal' };
+        const quote = await this.fetchGeckoQuote(tokenAddress, network);
+        return { ...quote, source: 'geckoterminal' };
       } catch (geckoErr) {
         const geckoError =
           geckoErr instanceof Error ? geckoErr : new Error(String(geckoErr));
@@ -531,9 +714,11 @@ export class OracleService {
     call: Call,
     manager: import('typeorm').EntityManager,
   ): Promise<ResolutionResult> {
-    let priceResult: { price: number; source: 'dexscreener' | 'geckoterminal' };
+    let quote: PriceFreshness & {
+      source: 'dexscreener' | 'geckoterminal';
+    };
     try {
-      priceResult = await this.fetchPriceWithFallback(call.tokenAddress);
+      quote = await this.fetchPriceWithFallback(call.tokenAddress);
     } catch (err) {
       call.status = 'UNRESOLVED';
       await manager.save(Call, call);
@@ -541,7 +726,26 @@ export class OracleService {
       return { callId: call.id, status: 'UNRESOLVED' };
     }
 
-    const { price, source } = priceResult;
+    // ── BE-018: refuse to settle on a price we cannot trust ───────────────
+    // Done before any evidence is pinned or signature is produced, so a
+    // frozen call leaves no signature and no IPFS pin that a later step could
+    // mistake for a completed resolution.
+    const resolutionAtMs = call.endTs
+      ? new Date(call.endTs).getTime()
+      : Date.now();
+    const changedAtMs = this.priceStaleness
+      ? this.priceStaleness.observePriceChange(call.tokenAddress, quote.price)
+      : undefined;
+
+    const verdict = this.priceStaleness
+      ? this.priceStaleness.evaluate({ ...quote, changedAtMs }, resolutionAtMs)
+      : { fresh: true, violations: [] };
+
+    if (!verdict.fresh) {
+      return this.haltResolution(call, verdict.violations, manager);
+    }
+
+    const { price, source } = quote;
     const outcome = this.determineOutcome(call, price);
     const scaledPrice = this.scalePrice(price);
 
@@ -601,6 +805,10 @@ export class OracleService {
     call.status = 'SETTLED';
     call.outcome = outcome;
     call.finalPrice = price;
+    // BE-019: the 24 h dispute window is measured from settlement, so this has
+    // to be stamped here. `settledAt` is set once and never moved, unlike
+    // `updatedAt`, so a later edit cannot silently move a dispute deadline.
+    call.settledAt = new Date();
     call.evidenceCid = evidenceCid ?? call.evidenceCid;
     call.oracleSignature = oracleSignature ?? call.oracleSignature;
     await manager.save(Call, call);
@@ -660,6 +868,120 @@ export class OracleService {
     return condition.direction === 'above'
       ? price >= condition.targetPrice
       : price <= condition.targetPrice;
+  }
+
+  /**
+   * Freeze a call whose price cannot be trusted (BE-018).
+   *
+   * The call is left with no outcome, no final price, and no signature. That
+   * matters: a halted call must not be readable as "resolved to something",
+   * because the only thing anyone can do with a signature is act on it.
+   */
+  private async haltResolution(
+    call: Call,
+    violations: StalenessViolation[],
+    manager: import('typeorm').EntityManager,
+  ): Promise<ResolutionResult> {
+    const reason = violations.map((v) => v.message).join('; ');
+    this.logger.error(
+      `Call ${call.id} frozen as RESOLUTION_HALTED: ${reason}`,
+    );
+
+    call.status = 'RESOLUTION_HALTED';
+    call.resolutionHaltedReason = reason;
+    call.statusUpdatedAt = new Date();
+    await manager.save(Call, call);
+
+    if (this.auditLogRepository) {
+      await manager.save(AuditLog, {
+        action: AuditLogAction.ORACLE_RESOLUTION_HALTED,
+        actor: 'oracle-worker',
+        targetResource: `call:${call.id}`,
+        payload: {
+          reason,
+          violations,
+          tokenAddress: call.tokenAddress,
+          endTs: call.endTs,
+        },
+        chain: call.chain,
+      });
+    }
+
+    this.eventEmitter?.emit('oracle.resolution_halted', {
+      callId: call.id,
+      chain: call.chain,
+      reason,
+      violations,
+    });
+
+    await this.notifyAdminOfHalt(call, violations);
+
+    return {
+      callId: call.id,
+      status: 'RESOLUTION_HALTED',
+      haltedReason: reason,
+    };
+  }
+
+  /**
+   * Alert admins that a call was frozen, with the full context needed to
+   * decide whether to unfreeze it.
+   *
+   * A freeze with no alert is worse than no freeze: the call silently stops
+   * resolving and nobody investigates.
+   */
+  private async notifyAdminOfHalt(
+    call: Call,
+    violations: StalenessViolation[],
+  ): Promise<void> {
+    const webhookUrl = this.configService.get<string>(
+      'DISCORD_ADMIN_WEBHOOK_URL',
+    );
+    const lines = [
+      `🧊 **Resolution Frozen** 🧊`,
+      `Call ID: ${call.id} (on-chain ${call.callOnchainId ?? 'n/a'}) was frozen as ` +
+        '**RESOLUTION_HALTED** and will not settle on its current price.',
+      `Token: \`${call.tokenAddress}\``,
+      `Chain: ${call.chain}`,
+      `End: ${call.endTs?.toISOString?.() ?? 'unknown'}`,
+      '',
+      '**Reasons**',
+      ...violations.map(
+        (v) =>
+          `• \`${v.reason}\` — ${v.message}` +
+          (v.source ? ` (source: ${v.source})` : ''),
+      ),
+      '',
+      `Thresholds: max age ${violations[0]?.staleThresholdSeconds}s, ` +
+        `min 24h volume $${violations[0]?.volumeThreshold}.`,
+      '',
+      'Resolve by fixing the underlying feed, then unfreeze via the admin API: ' +
+        '`POST /admin/calls/:id/unfreeze-resolution`.',
+    ];
+
+    const message = lines.join('\n');
+
+    if (!webhookUrl) {
+      this.logger.warn(
+        `No DISCORD_ADMIN_WEBHOOK_URL configured. Call ${call.id} frozen. ${message}`,
+      );
+      return;
+    }
+
+    try {
+      await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: message }),
+      });
+    } catch (err) {
+      // A failed alert must not roll back the freeze: settling on a bad price
+      // is the outcome we are trying to prevent, and a webhook outage is not
+      // a reason to start settling anyway.
+      this.logger.error(
+        `Failed to send freeze alert for call ${call.id}: ${(err as Error).message}`,
+      );
+    }
   }
 
   private async recordUnresolved(

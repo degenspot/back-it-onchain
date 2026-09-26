@@ -14,6 +14,14 @@
 
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type { Server } from 'socket.io';
+
+/** Minimal ioredis surface the Socket.io adapter needs. */
+interface RedisClient {
+  on(event: string, handler: (err: Error) => void): void;
+  quit(): Promise<unknown>;
+  disconnect(): void;
+}
 
 export interface IRedisClient {
   /** SET key value NX PX ttlMs — returns 'OK' on success, null if key already set */
@@ -187,5 +195,122 @@ export class RedisClientProvider implements OnModuleInit, OnModuleDestroy {
     store: Map<string, { value: string; expiresAt: number }>,
   ): IRedisClient {
     return new InProcessRedisStub();
+  }
+}
+
+// ─── Socket.io cluster adapter (BE-021) ───────────────────────────────────
+
+/**
+ * Wires Socket.io's Redis adapter so broadcasts fan out across every backend
+ * replica (BE-021).
+ *
+ * Without this, each instance only knows about its own sockets. A user
+ * connected to instance A never sees an event emitted from instance B, so
+ * "market price updated" silently does not reach most of the audience the
+ * moment the backend is scaled past one process.
+ *
+ * Two dedicated connections are required — Redis puts a subscribed connection
+ * into a mode where it cannot issue ordinary commands, so pub and sub each get
+ * their own client. They are created here and closed on shutdown; leaking two
+ * Redis connections per instance is how a rolling deploy ends up with hundreds
+ * of idle sockets.
+ *
+ * A note on the issue wording: it asks for broadcast "via Redis streams" while
+ * naming `@socket.io/redis-adapter` as the mechanism. That package uses Redis
+ * pub/sub, not streams, and it is the package the issue names, so pub/sub is
+ * what is wired here. Streams would mean
+ * `@socket.io/redis-streams-adapter`, which trades latency for durability —
+ * the wrong trade for a live price feed, where a stale message is worse than a
+ * dropped one.
+ */
+@Injectable()
+export class SocketIoRedisAdapterProvider
+  implements OnModuleInit, OnModuleDestroy
+{
+  private readonly logger = new Logger(SocketIoRedisAdapterProvider.name);
+  private pub?: RedisClient;
+  private sub?: RedisClient;
+
+  constructor(private readonly config: ConfigService) {}
+
+  async onModuleInit(): Promise<void> {
+    const redisUrl = this.config.get<string>('REDIS_URL');
+    if (!redisUrl) {
+      this.logger.warn(
+        'REDIS_URL not set — Socket.io will run single-instance. Broadcasts ' +
+          'will not cross backend replicas.',
+      );
+      return;
+    }
+    await this.connect(redisUrl);
+  }
+
+  private async connect(redisUrl: string): Promise<void> {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const IORedis = require('ioredis') as typeof import('ioredis');
+      const Redis = IORedis.default ?? IORedis;
+
+      this.pub = new Redis(redisUrl, { maxRetriesPerRequest: null });
+      this.sub = new Redis(redisUrl, { maxRetriesPerRequest: null });
+
+      this.pub?.on('error', (err: Error) =>
+        this.logger.error(`Socket.io pub client error: ${err.message}`),
+      );
+      this.sub?.on('error', (err: Error) =>
+        this.logger.error(`Socket.io sub client error: ${err.message}`),
+      );
+
+      this.logger.log(`Socket.io Redis adapter connected to ${redisUrl}`);
+    } catch (err) {
+      this.logger.warn(
+        `Could not connect Socket.io adapter (${(err as Error).message}) — ` +
+          'falling back to single-instance broadcasting',
+      );
+    }
+  }
+
+  /**
+   * Build the adapter for `server.io`, or return undefined when Redis is not
+   * available so the caller can carry on with the default in-memory adapter.
+   */
+  createAdapter(io?: Server): unknown {
+    if (!this.pub || !this.sub) return undefined;
+
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { createAdapter } = require('@socket.io/redis-adapter') as
+      typeof import('@socket.io/redis-adapter');
+
+    const adapter = createAdapter(this.pub, this.sub, {
+      // How long to wait for other nodes to answer a room/ack request before
+      // giving up on them. 5 s is the library default; stated explicitly because
+      // a value that is too low makes a slow node look like an empty room, which
+      // silently drops a broadcast rather than failing loudly.
+      requestsTimeout: 5_000,
+      // Answer on a channel private to the requesting node instead of the shared
+      // one. Without it, every node's response traffic is broadcast to every
+      // other node, so N instances cost N² messages for what should be N.
+      publishOnSpecificResponseChannel: true,
+    });
+
+    if (io) io.adapter(adapter);
+    return adapter;
+  }
+
+  isClustered(): boolean {
+    return Boolean(this.pub && this.sub);
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    // Both clients must be closed or the process holds the event loop open.
+    for (const client of [this.pub, this.sub]) {
+      try {
+        await client?.quit();
+      } catch {
+        client?.disconnect();
+      }
+    }
+    this.pub = undefined;
+    this.sub = undefined;
   }
 }
