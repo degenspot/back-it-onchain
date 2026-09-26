@@ -2741,3 +2741,136 @@ fn test_no_vault_path_unchanged() {
     assert!(call.settled);
     assert_eq!(call.vault_balance, 1091);
 }
+
+// ── SC-003: create_call_with_allocations ──────────────────────────────────────
+
+fn setup_allocations_env(env: &Env) -> (CallRegistryClient<'_>, Address, Address, Address) {
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, CallRegistry);
+    let client = CallRegistryClient::new(env, &contract_id);
+    let admin = Address::generate(env);
+    client.initialize(&admin);
+
+    let creator = Address::generate(env);
+    let stake_token_admin = Address::generate(env);
+    let stake_token_contract = env.register_stellar_asset_contract_v2(stake_token_admin.clone());
+    let stake_token = stake_token_contract.address();
+    let stake_token_admin_client = token::StellarAssetClient::new(env, &stake_token);
+
+    stake_token_admin_client.mint(&creator, &10_000);
+    client.whitelist_token_admin(&stake_token);
+
+    (client, creator, stake_token, contract_id.clone())
+}
+
+#[test]
+fn test_create_call_with_allocations_splits_across_outcomes() {
+    let env = Env::default();
+    let (client, creator, stake_token, _contract_id) = setup_allocations_env(&env);
+
+    let mut metadata = default_metadata(&env);
+    metadata.num_outcomes = 3;
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    let allocations = vec![&env, 700i128, 200i128, 100i128];
+    let call_id = client.create_call_with_allocations(
+        &creator,
+        &stake_token,
+        &1000,
+        &end_ts,
+        &metadata,
+        &allocations,
+    );
+
+    let call = client.get_call(&call_id);
+    assert_eq!(call.outcome_pools.get(0).unwrap(), 700);
+    assert_eq!(call.outcome_pools.get(1).unwrap(), 200);
+    assert_eq!(call.outcome_pools.get(2).unwrap(), 100);
+    assert_eq!(call.vault_balance, 1000);
+    assert_eq!(call.participant_count, 1);
+
+    assert_eq!(client.get_user_stake(&call_id, &creator, &0u32), 700);
+    assert_eq!(client.get_user_stake(&call_id, &creator, &1u32), 200);
+    assert_eq!(client.get_user_stake(&call_id, &creator, &2u32), 100);
+
+    let events = env.events().all();
+    let last_event = events.last().unwrap();
+    let symbol: Symbol = last_event.1.get(0).unwrap().into_val(&env);
+    assert_eq!(symbol, Symbol::new(&env, "CallCreatedWithAllocations"));
+}
+
+#[test]
+#[should_panic(expected = "initial_allocations must sum to stake_amount")]
+fn test_create_call_with_allocations_rejects_sum_mismatch() {
+    let env = Env::default();
+    let (client, creator, stake_token, _contract_id) = setup_allocations_env(&env);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    let allocations = vec![&env, 60i128, 30i128]; // sums to 90, not 100
+    client.create_call_with_allocations(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &default_metadata(&env),
+        &allocations,
+    );
+}
+
+#[test]
+#[should_panic(expected = "initial_allocations length must equal num_outcomes")]
+fn test_create_call_with_allocations_rejects_length_mismatch() {
+    let env = Env::default();
+    let (client, creator, stake_token, _contract_id) = setup_allocations_env(&env);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    let allocations = vec![&env, 100i128]; // length 1, but num_outcomes is 2
+    client.create_call_with_allocations(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &default_metadata(&env),
+        &allocations,
+    );
+}
+
+#[test]
+#[should_panic(expected = "initial_allocations must not contain negative amounts")]
+fn test_create_call_with_allocations_rejects_negative_allocation() {
+    let env = Env::default();
+    let (client, creator, stake_token, _contract_id) = setup_allocations_env(&env);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    let allocations = vec![&env, 150i128, -50i128];
+    client.create_call_with_allocations(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &default_metadata(&env),
+        &allocations,
+    );
+}
+
+#[test]
+fn test_create_call_with_allocations_skips_stake_record_for_zero_outcomes() {
+    let env = Env::default();
+    let (client, creator, stake_token, _contract_id) = setup_allocations_env(&env);
+
+    let end_ts = env.ledger().timestamp() + 1000;
+    let allocations = vec![&env, 100i128, 0i128];
+    let call_id = client.create_call_with_allocations(
+        &creator,
+        &stake_token,
+        &100,
+        &end_ts,
+        &default_metadata(&env),
+        &allocations,
+    );
+
+    // No stake was recorded for outcome 1, so get_user_stake should read the
+    // storage default (0) rather than panicking.
+    assert_eq!(client.get_user_stake(&call_id, &creator, &1u32), 0);
+}
