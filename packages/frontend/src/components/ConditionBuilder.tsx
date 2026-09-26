@@ -24,6 +24,13 @@ import {
   type Condition,
   type ConditionKind,
 } from '../lib/condition';
+import {
+  crosshairYFromPrice,
+  percentDelta,
+  priceFromCrosshairY,
+  projectedPayoutMultiplier,
+  type FormattedChartData,
+} from '../lib/chart-utils';
 
 export interface ConditionBuilderProps {
   value: Condition;
@@ -33,6 +40,10 @@ export interface ConditionBuilderProps {
   /** Seeds the percent-move reference and the preview probe. */
   referencePrice?: number;
   disabled?: boolean;
+  /** Historical price series (FE-004). Renders the crosshair pinning chart when given. */
+  priceSeries?: FormattedChartData[];
+  /** Forwarded to the crosshair chart's payout-multiplier readout, when given. */
+  payoutInput?: PriceChartCrosshairPinnerProps['payoutInput'];
 }
 
 /**
@@ -322,12 +333,272 @@ export function ConditionPreview({
   );
 }
 
+/** A single price the crosshair chart can pin, and the price it currently holds. */
+export interface PinnableTarget {
+  id: string;
+  label: string;
+  price: number;
+}
+
+/**
+ * Which of a condition's numeric fields are pinnable on the price chart.
+ *
+ * A range has two independent thresholds; the other two kinds have one each.
+ * `percent_move`'s reference price counts too, since it is still a price the
+ * chart can set, even though it is not itself the resolution threshold.
+ */
+export function pinnableTargetsFor(condition: Condition): PinnableTarget[] {
+  switch (condition.kind) {
+    case 'target_price':
+      return [{ id: 'price', label: 'Target price', price: condition.price }];
+
+    case 'percent_move':
+      return [{ id: 'basePrice', label: 'Reference price', price: condition.basePrice }];
+
+    case 'range':
+      return [
+        { id: 'lower', label: 'Lower bound', price: condition.lower },
+        { id: 'upper', label: 'Upper bound', price: condition.upper },
+      ];
+  }
+}
+
+/** Apply a pinned target's new price back onto the condition it came from. */
+export function applyPinnedTarget(
+  condition: Condition,
+  targetId: string,
+  price: number,
+): Condition {
+  switch (condition.kind) {
+    case 'target_price':
+      return targetId === 'price' ? { ...condition, price } : condition;
+
+    case 'percent_move':
+      return targetId === 'basePrice' ? { ...condition, basePrice: price } : condition;
+
+    case 'range':
+      if (targetId === 'lower') return { ...condition, lower: price };
+      if (targetId === 'upper') return { ...condition, upper: price };
+      return condition;
+  }
+}
+
+export interface PriceChartCrosshairPinnerProps {
+  /** Historical price series shown as the reference line. */
+  data: FormattedChartData[];
+  targets: PinnableTarget[];
+  onTargetChange: (targetId: string, price: number) => void;
+  /** Used for the delta% readout; falls back to the series' last point. */
+  referencePrice?: number;
+  /** When given, each target also shows a projected payout multiplier. */
+  payoutInput?: {
+    userStake: number;
+    winningPoolTotal: number;
+    losingPoolTotal: number;
+    feeBps?: number;
+  };
+  disabled?: boolean;
+  height?: number;
+}
+
+/**
+ * Historical price line with one draggable horizontal crosshair per pinnable
+ * target (FE-004).
+ *
+ * Drawn as plain SVG rather than through a canvas charting library: the drag
+ * interaction is the feature, and a hand-rolled polyline keeps the pixel math
+ * (drag position to price, and back) in two pure, independently testable
+ * functions in `chart-utils`, instead of behind a third-party chart's
+ * internal coordinate system.
+ *
+ * Dragging updates the same condition fields the number inputs above write
+ * to, and moving those inputs moves the line here: both read from `targets`,
+ * which the parent derives from one source of truth, the condition itself.
+ */
+export function PriceChartCrosshairPinner({
+  data,
+  targets,
+  onTargetChange,
+  referencePrice,
+  payoutInput,
+  disabled,
+  height = 220,
+}: PriceChartCrosshairPinnerProps) {
+  const width = 600;
+  const svgRef = React.useRef<SVGSVGElement | null>(null);
+  const [draggingId, setDraggingId] = React.useState<string | null>(null);
+
+  const values = data.map((point) => point.value);
+  const targetPrices = targets.map((target) => target.price);
+  const allPrices = [...values, ...targetPrices].filter(Number.isFinite);
+
+  const rawMin = allPrices.length > 0 ? Math.min(...allPrices) : 0;
+  const rawMax = allPrices.length > 0 ? Math.max(...allPrices) : 1;
+  const padding = Math.max((rawMax - rawMin) * 0.1, rawMax * 0.01, 1e-6);
+  const minPrice = rawMin - padding;
+  const maxPrice = rawMax + padding;
+
+  const effectiveReference = referencePrice ?? values[values.length - 1] ?? 0;
+
+  const priceAtClientY = React.useCallback(
+    (clientY: number) => {
+      const rect = svgRef.current?.getBoundingClientRect();
+      const top = rect?.top ?? 0;
+      const rectHeight = rect?.height || height;
+      const localY = ((clientY - top) / rectHeight) * height;
+
+      return priceFromCrosshairY(localY, height, minPrice, maxPrice);
+    },
+    [height, minPrice, maxPrice],
+  );
+
+  React.useEffect(() => {
+    if (!draggingId) return;
+
+    function handleMove(event: MouseEvent | TouchEvent) {
+      const clientY = 'touches' in event ? event.touches[0]?.clientY : event.clientY;
+      if (clientY === undefined) return;
+
+      onTargetChange(draggingId as string, priceAtClientY(clientY));
+    }
+
+    function handleUp() {
+      setDraggingId(null);
+    }
+
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    window.addEventListener('touchmove', handleMove);
+    window.addEventListener('touchend', handleUp);
+
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+      window.removeEventListener('touchmove', handleMove);
+      window.removeEventListener('touchend', handleUp);
+    };
+  }, [draggingId, onTargetChange, priceAtClientY]);
+
+  const linePoints = data
+    .map((point, index) => {
+      const x = data.length <= 1 ? 0 : (index / (data.length - 1)) * width;
+      const y = crosshairYFromPrice(point.value, height, minPrice, maxPrice);
+
+      return `${x},${y}`;
+    })
+    .join(' ');
+
+  const step = (maxPrice - minPrice) / 100 || 1;
+
+  return (
+    <div data-testid="crosshair-chart" className="flex flex-col gap-2">
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${width} ${height}`}
+        width="100%"
+        height={height}
+        role="group"
+        aria-label="Price history with draggable target lines"
+        className="rounded border bg-white"
+      >
+        {values.length > 1 ? (
+          <polyline
+            data-testid="crosshair-price-line"
+            points={linePoints}
+            fill="none"
+            stroke="#9ca3af"
+            strokeWidth={1.5}
+          />
+        ) : null}
+
+        {targets.map((target, index) => {
+          const y = crosshairYFromPrice(target.price, height, minPrice, maxPrice);
+          const color = index === 0 ? '#2563eb' : '#dc2626';
+
+          return (
+            <g key={target.id} data-testid={`crosshair-target-${target.id}`}>
+              <line x1={0} x2={width} y1={y} y2={y} stroke={color} strokeWidth={1.5} strokeDasharray="4 3" />
+              {/* Wide, mostly-transparent hit area: easier to grab than the 1.5px line itself. */}
+              <rect
+                x={0}
+                y={y - 8}
+                width={width}
+                height={16}
+                fill="transparent"
+                style={{ cursor: disabled ? 'default' : 'ns-resize' }}
+                data-testid={`crosshair-hitarea-${target.id}`}
+                tabIndex={disabled ? -1 : 0}
+                role="slider"
+                aria-label={target.label}
+                aria-valuemin={Math.round(minPrice)}
+                aria-valuemax={Math.round(maxPrice)}
+                aria-valuenow={Math.round(target.price)}
+                aria-valuetext={`$${target.price.toFixed(2)}`}
+                onMouseDown={() => !disabled && setDraggingId(target.id)}
+                onTouchStart={() => !disabled && setDraggingId(target.id)}
+                onKeyDown={(event) => {
+                  if (disabled) return;
+
+                  if (event.key === 'ArrowUp' || event.key === 'ArrowRight') {
+                    event.preventDefault();
+                    onTargetChange(target.id, target.price + step);
+                  } else if (event.key === 'ArrowDown' || event.key === 'ArrowLeft') {
+                    event.preventDefault();
+                    onTargetChange(target.id, target.price - step);
+                  } else if (event.key === 'Home') {
+                    event.preventDefault();
+                    onTargetChange(target.id, minPrice);
+                  } else if (event.key === 'End') {
+                    event.preventDefault();
+                    onTargetChange(target.id, maxPrice);
+                  }
+                }}
+              />
+            </g>
+          );
+        })}
+      </svg>
+
+      <div className="flex flex-wrap gap-4 text-xs">
+        {targets.map((target, index) => {
+          const delta = percentDelta(target.price, effectiveReference);
+          const multiplier = payoutInput
+            ? projectedPayoutMultiplier({ ...payoutInput, userStake: payoutInput.userStake })
+            : null;
+          const color = index === 0 ? 'text-blue-700' : 'text-red-700';
+
+          return (
+            <div key={target.id} data-testid={`crosshair-readout-${target.id}`} className={color}>
+              <span className="font-medium">{target.label}:</span> ${target.price.toFixed(2)} ·{' '}
+              <span data-testid={`crosshair-delta-${target.id}`}>
+                {delta >= 0 ? '+' : ''}
+                {delta.toFixed(1)}%
+              </span>
+              {multiplier !== null ? (
+                <>
+                  {' '}
+                  ·{' '}
+                  <span data-testid={`crosshair-multiplier-${target.id}`}>
+                    {multiplier.toFixed(2)}x payout
+                  </span>
+                </>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function ConditionBuilder({
   value,
   onChange,
   onValidityChange,
   referencePrice = 100,
   disabled,
+  priceSeries,
+  payoutInput,
 }: ConditionBuilderProps) {
   const [probePrice, setProbePrice] = React.useState(referencePrice);
 
@@ -337,8 +608,21 @@ export function ConditionBuilder({
     onValidityChange?.(valid);
   }, [valid, onValidityChange]);
 
+  const pinnableTargets = pinnableTargetsFor(value);
+
   return (
     <section className="flex flex-col gap-4" data-testid="condition-builder">
+      {priceSeries ? (
+        <PriceChartCrosshairPinner
+          data={priceSeries}
+          targets={pinnableTargets}
+          referencePrice={referencePrice}
+          payoutInput={payoutInput}
+          disabled={disabled}
+          onTargetChange={(targetId, price) => onChange(applyPinnedTarget(value, targetId, price))}
+        />
+      ) : null}
+
       <div role="tablist" aria-label="Condition type" className="flex gap-2">
         {CONDITION_KINDS.map((kind) => (
           <button

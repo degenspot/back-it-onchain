@@ -13,6 +13,7 @@
 
 import { z } from 'zod';
 import { formatChartData, type FormattedChartData, type RawChartData } from './chart-utils';
+import type { ConditionAst } from './validators/condition-schema';
 
 /** Version stamped into every serialized condition. */
 export const CONDITION_SCHEMA_VERSION = 1;
@@ -276,4 +277,109 @@ export function conditionPreviewSeries(
   });
 
   return formatChartData(raw);
+}
+
+// ── Multi-outcome pool distribution (FE-001) ───────────────────────────────
+
+/** A single outcome's staked reserve, as tracked by the pool. */
+export interface OutcomeReserve {
+  id: string;
+  total: number;
+}
+
+/** An outcome's normalized share of the pool, 0-100. */
+export interface OutcomePercentage {
+  id: string;
+  percent: number;
+}
+
+/**
+ * Normalize outcome reserves into percentages that sum to 100.
+ *
+ * A fresh multi-outcome market has no stakes yet, so every reserve is zero.
+ * Dividing by a zero total would be meaningless, and the honest answer for an
+ * undecided market is an even split across whatever outcomes exist, not a
+ * crash or a stack of `NaN`s.
+ */
+export function normalizeOutcomePercentages(reserves: OutcomeReserve[]): OutcomePercentage[] {
+  if (reserves.length === 0) return [];
+
+  const total = reserves.reduce((sum, reserve) => sum + Math.max(0, reserve.total), 0);
+
+  if (total <= 0) {
+    const even = 100 / reserves.length;
+
+    return reserves.map((reserve) => ({ id: reserve.id, percent: even }));
+  }
+
+  return reserves.map((reserve) => ({
+    id: reserve.id,
+    percent: (Math.max(0, reserve.total) / total) * 100,
+  }));
+}
+
+/**
+ * A deterministic color for outcome `index` of `count`, spaced evenly around
+ * the hue wheel so any number of outcomes (2 to 32) gets visually distinct,
+ * reproducible colors without a lookup table to maintain.
+ */
+export function outcomeColor(index: number, count: number): string {
+  if (count <= 0) return 'hsl(0, 70%, 50%)';
+
+  const hue = Math.round((360 * index) / count);
+
+  return `hsl(${hue}, 70%, 50%)`;
+}
+
+// ── Condition-AST bridge (FE-005) ───────────────────────────────────────────
+
+/**
+ * Express a builder condition as the raw AST syntax, given an expiry.
+ *
+ * `percent_move` has no AST equivalent of its own, so it is reduced to the
+ * absolute price threshold it implies, same as {@link conditionThresholds}
+ * does for the preview chart. `MULTI_STEP_LADDER` has no builder equivalent
+ * and so is never produced here.
+ */
+export function toConditionAst(condition: Condition, expiresAt: number): ConditionAst {
+  switch (condition.kind) {
+    case 'target_price':
+      return condition.direction === 'above'
+        ? { type: 'PRICE_ABOVE', price: condition.price, expiresAt }
+        : { type: 'PRICE_BELOW', price: condition.price, expiresAt };
+
+    case 'percent_move': {
+      const [threshold] = conditionThresholds(condition);
+
+      return condition.direction === 'up'
+        ? { type: 'PRICE_ABOVE', price: threshold, expiresAt }
+        : { type: 'PRICE_BELOW', price: threshold, expiresAt };
+    }
+
+    case 'range':
+      return { type: 'RANGE_BOUND', lower: condition.lower, upper: condition.upper, expiresAt };
+  }
+}
+
+/**
+ * Read a builder condition back out of an AST, where one exists.
+ *
+ * Returns `null` for `MULTI_STEP_LADDER`, which the three-kind builder union
+ * has no way to represent, rather than lossily collapsing it to one of its
+ * steps.
+ */
+export function fromConditionAst(ast: ConditionAst): Condition | null {
+  switch (ast.type) {
+    case 'PRICE_ABOVE':
+      return { kind: 'target_price', direction: 'above', price: ast.price };
+
+    case 'PRICE_BELOW':
+      return { kind: 'target_price', direction: 'below', price: ast.price };
+
+    case 'RANGE_BOUND':
+      return { kind: 'range', lower: ast.lower, upper: ast.upper, inclusive: true };
+
+    case 'MULTI_STEP_LADDER':
+      return null;
+  }
 }
