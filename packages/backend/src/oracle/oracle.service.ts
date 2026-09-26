@@ -17,6 +17,16 @@ import { Call } from '../calls/call.entity';
 import { AuditLog, AuditLogAction } from './audit-log.entity';
 import { IKeySigner, LocalWalletSigner, KmsSigner } from './key-signer';
 import {
+  IStellarKeySigner,
+  KmsEd25519Signer,
+  LocalEd25519Signer,
+  StellarResolutionPayload,
+  StellarSignature,
+  assertValidResolutionPayload,
+  buildCanonicalResolutionPayload,
+  digestResolutionPayload,
+} from './key-signer';
+import {
   QuorumConsensusService,
   ResolutionPayload,
 } from './quorum-consensus.service';
@@ -241,6 +251,18 @@ export class OracleService {
   /** KMS/local abstraction used by signEIP712() — see key-signer.ts (BE-02). */
   private activeSigner?: IKeySigner;
 
+  /**
+   * BE-12: ed25519 signer for Soroban submissions. An HSM/KMS-backed signer in
+   * production (`STELLAR_KMS_URL` set — no secret key ever enters this
+   * process), the local secret key in development.
+   */
+  private activeStellarSigner?: IStellarKeySigner;
+
+  /** Reports where the ed25519 key lives, for audit logs and the admin API. */
+  get stellarSignerKind(): 'local' | 'hsm' | 'none' {
+    return this.activeStellarSigner?.kind ?? 'none';
+  }
+
   constructor(
     private configService: ConfigService,
     private adminService: AdminService,
@@ -281,6 +303,23 @@ export class OracleService {
       );
     } else if (privateKey) {
       this.activeSigner = new LocalWalletSigner(privateKey);
+    }
+
+    // BE-12: an HSM/KMS signer wins over the in-process secret key so a
+    // production deployment can be configured to *refuse* to hold a seed.
+    const stellarKmsUrl = this.configService.get<string>('STELLAR_KMS_URL');
+    if (stellarKmsUrl) {
+      this.activeStellarSigner = new KmsEd25519Signer(
+        stellarKmsUrl,
+        this.configService.get<string>('STELLAR_KMS_KEY_ID', ''),
+        this.configService.get<string>('STELLAR_KMS_API_TOKEN'),
+      );
+      this.logger.log(
+        'Stellar oracle signing delegated to an external HSM/KMS — ' +
+          'no ed25519 secret key is held in this process',
+      );
+    } else if (stellarSecretKey) {
+      this.activeStellarSigner = new LocalEd25519Signer(stellarSecretKey);
     }
   }
 
@@ -939,6 +978,81 @@ export class OracleService {
   // ─── Stellar (ed25519) signing ────────────────────────────────────────────
 
   /**
+   * BE-012: the canonical resolution payload the Soroban `OutcomeManager`
+   * contract verifies. Exposed on the service so the relayer (BE-14) and the
+   * tests agree on one byte layout.
+   */
+  buildResolutionPayload(
+    callId: number,
+    outcomeIndex: 0 | 1 | boolean,
+    finalPrice: number | string | bigint,
+    timestamp: number,
+  ): StellarResolutionPayload {
+    const payload: StellarResolutionPayload = {
+      callId,
+      outcomeIndex,
+      finalPrice,
+      timestamp,
+    };
+    // Fail fast at the call site as well as inside the signer: an invalid
+    // payload must never reach a signing operation, HSM or local alike.
+    assertValidResolutionPayload(payload);
+    return payload;
+  }
+
+  /** The exact 33 bytes the contract rebuilds before `ed25519_verify`. */
+  buildCanonicalPayload(payload: StellarResolutionPayload): Buffer {
+    return buildCanonicalResolutionPayload(payload);
+  }
+
+  /** sha256 of the canonical payload — the audit-log / idempotency key. */
+  digestResolution(payload: StellarResolutionPayload): string {
+    return digestResolutionPayload(payload);
+  }
+
+  /**
+   * BE-012: signs a Soroban resolution vote.
+   *
+   * Signs the canonical 33-byte payload (not a human-readable string), so the
+   * 64-byte signature is directly consumable by
+   * `env.crypto().ed25519_verify(&oracle_pubkey, &message, &signature)` inside
+   * `submit_outcome`.
+   */
+  async signResolution(
+    payload: StellarResolutionPayload,
+  ): Promise<StellarSignature> {
+    if (this.adminService.isPaused()) {
+      throw new ServiceUnavailableException(
+        'Protocol is paused. Oracle signatures are disabled.',
+      );
+    }
+    if (!this.activeStellarSigner) {
+      throw new Error(
+        'Stellar oracle signer not configured (no STELLAR_ORACLE_SECRET_KEY or STELLAR_KMS_URL)',
+      );
+    }
+
+    const signature = await this.activeStellarSigner.sign(payload);
+    this.logger.log(
+      `Signed resolution payload ${signature.payloadHash} for call ${payload.callId} ` +
+        `(outcome ${payload.outcomeIndex === true ? 1 : payload.outcomeIndex === false ? 0 : payload.outcomeIndex}, ${this.activeStellarSigner.kind} key)`,
+    );
+    return signature;
+  }
+
+  /** Convenience wrapper: build the payload, then sign it. */
+  async signResolutionForCall(
+    callId: number,
+    outcome: boolean,
+    finalPrice: number | string | bigint,
+    timestamp: number,
+  ): Promise<StellarSignature> {
+    return this.signResolution(
+      this.buildResolutionPayload(callId, outcome, finalPrice, timestamp),
+    );
+  }
+
+  /**
    * Sign outcome with ed25519 for Stellar/Soroban verification.
    *
    * Message format: BackIt:Outcome:{callId}:{outcome}:{finalPrice}:{timestamp}
@@ -946,6 +1060,10 @@ export class OracleService {
    *   - outcome:    'true' or 'false' (as string)
    *   - finalPrice: the final price as a number
    *   - timestamp:  unix timestamp in seconds
+   *
+   * @deprecated Legacy ASCII framing kept for callers that verify off-chain
+   * with the `verifyEd25519` helper. On-chain submissions must use
+   * `signResolution`, which signs the canonical payload the contract rebuilds.
    *
    * @returns 64-byte Buffer (compatible with Soroban BytesN<64>)
    */
