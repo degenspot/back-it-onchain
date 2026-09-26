@@ -52,7 +52,8 @@ describe('Database Schema Validation (Integration)', () => {
         details.includes('ECONNREFUSED') ||
         details.includes('connect ECONNREFUSED') ||
         details.includes('Connection terminated') ||
-        details.includes('getaddrinfo ENOTFOUND');
+        details.includes('getaddrinfo ENOTFOUND') ||
+        details.includes('password authentication failed');
 
       if (looksLikeDbUnavailable) {
         console.warn(

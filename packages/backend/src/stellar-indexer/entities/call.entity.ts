@@ -16,6 +16,7 @@ export enum ChainType {
 @Index('idx_calls_chain_tx_hash', ['chain', 'txHash'])
 @Index('idx_calls_contract_id', ['contractId'])
 @Index('idx_calls_created_at', ['createdAt'])
+@Index('idx_calls_chain_call_onchain_id', ['chain', 'callOnchainId'])
 export class Call {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -26,6 +27,18 @@ export class Call {
     default: ChainType.BASE,
   })
   chain: ChainType;
+
+  @Column({
+    nullable: true,
+    comment: 'On-chain call id emitted by the contract (Soroban call_id); null for chains without one',
+  })
+  callOnchainId: string;
+
+  @Column({
+    nullable: true,
+    comment: 'Lifecycle status: OPEN, SETTLING, SETTLED, CANCELLED',
+  })
+  status: string;
 
   @Column({
     nullable: false,

@@ -1,4 +1,4 @@
-import { Controller, Get, Res } from '@nestjs/common';
+import { Controller, Get, Res, Optional } from '@nestjs/common';
 import { Response } from 'express';
 import { SkipThrottle } from '@nestjs/throttler';
 import { ConfigService } from '@nestjs/config';
@@ -9,6 +9,7 @@ import {
 } from '@nestjs/terminus';
 import { CacheHealthIndicator } from './indicators/cache.health-indicator';
 import { RpcHealthIndicator } from './indicators/rpc.health-indicator';
+import { IndexerLockService } from '../stellar-indexer/services/indexer-lock.service';
 
 type IndicatorStatus = 'up' | 'down';
 
@@ -40,6 +41,7 @@ export class HealthController {
     private readonly disk: DiskHealthIndicator,
     private readonly cache: CacheHealthIndicator,
     private readonly rpc: RpcHealthIndicator,
+    @Optional() private readonly indexerLock?: IndexerLockService,
   ) {}
 
   /**
@@ -118,6 +120,37 @@ export class HealthController {
     }
 
     return { status, info, details };
+  }
+
+  /**
+   * GET /health/indexer — indexer distributed-lock status probe.
+   *
+   * Reports whether this pod is currently the active indexer leader,
+   * along with lock TTL and retry configuration. Safe to poll frequently
+   * (no external DB / RPC calls).
+   */
+  @Get('indexer')
+  getIndexerStatus(): {
+    status: 'leader' | 'standby' | 'unavailable';
+    isLeader: boolean;
+    lockTtlMs: number;
+    acquireRetryMs: number;
+  } {
+    if (!this.indexerLock) {
+      return {
+        status: 'unavailable',
+        isLeader: false,
+        lockTtlMs: 0,
+        acquireRetryMs: 0,
+      };
+    }
+    const lock = this.indexerLock.getStatus();
+    return {
+      status: lock.isLeader ? 'leader' : 'standby',
+      isLeader: lock.isLeader,
+      lockTtlMs: lock.lockTtlMs,
+      acquireRetryMs: lock.acquireRetryMs,
+    };
   }
 
   private async run(
