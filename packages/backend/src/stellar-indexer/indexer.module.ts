@@ -24,6 +24,8 @@ import { CallEventStoreService } from './services/call-event-store.service';
 import { MultiOutcomeEventService } from './services/multi-outcome-event.service';
 import { IndexerLockService } from './services/indexer-lock.service';
 import { RedisClientProvider } from '../config/redis.config';
+import { DiagnosticParserService } from './services/diagnostic-parser.service';
+import { RpcCircuitBreakerService } from './services/rpc-circuit-breaker.service';
 import { IndexerController } from './controllers/indexer.controller';
 
 @Module({
@@ -45,6 +47,8 @@ import { IndexerController } from './controllers/indexer.controller';
     LedgerCheckpointService,
     CallEventStoreService,
     MultiOutcomeEventService,
+    DiagnosticParserService,
+    RpcCircuitBreakerService,
   ],
   controllers: [IndexerController],
   exports: [
@@ -55,6 +59,8 @@ import { IndexerController } from './controllers/indexer.controller';
     CallEventStoreService,
     MultiOutcomeEventService,
     IndexerLockService,
+    DiagnosticParserService,
+    RpcCircuitBreakerService,
   ],
 })
 export class IndexerModule {}

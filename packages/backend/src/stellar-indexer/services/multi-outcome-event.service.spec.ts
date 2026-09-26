@@ -152,7 +152,8 @@ describe('MultiOutcomeEventService (BE-003)', () => {
         service.handleEvent(makeEvent('CallCreated', { call_id: 'C', creator: 'G', outcomes })),
       ).rejects.toThrow('33 outcomes (max 32)');
 
-      expect(qr.rollbackTransaction).toHaveBeenCalled();
+      // Validation rejects before any transaction is opened — nothing persisted
+      expect(qr.startTransaction).not.toHaveBeenCalled();
     });
 
     it('rolls back and rethrows on DB failure', async () => {
@@ -210,7 +211,7 @@ describe('MultiOutcomeEventService (BE-003)', () => {
         (c: unknown[]) => (c[1] as Record<string, unknown>)?.totalStake !== undefined,
       );
       expect((poolSaveCall?.[1] as Record<string, unknown>)?.totalStake).toBe(
-        '10007199254740992',
+        '1009007199254740992',
       );
     });
 

@@ -21,6 +21,7 @@ import {
   StellarIndexerConfig,
 } from './stellar-indexer.service';
 import { CallEventStoreService } from './call-event-store.service';
+import { MultiOutcomeEventService } from './multi-outcome-event.service';
 import { SorobanRpcClient } from '../../config/soroban-rpc.client';
 import { Call, ChainType } from '../entities/call.entity';
 import { InMemoryLedgerCheckpointStore } from './ledger-checkpoint.service';
@@ -34,13 +35,13 @@ function makeSymbolVal(sym: string): StellarSdk.xdr.ScVal {
 
 function makeU64Val(n: bigint): StellarSdk.xdr.ScVal {
   return StellarSdk.xdr.ScVal.scvU64(
-    new StellarSdk.xdr.Uint64(Number(n)),
+    new StellarSdk.xdr.Uint64(n),
   );
 }
 
 function makeAddressVal(publicKey: string): StellarSdk.xdr.ScVal {
   const kp = StellarSdk.Keypair.fromPublicKey(publicKey);
-  const accountId = StellarSdk.xdr.AccountID.publicKeyTypeEd25519(
+  const accountId = StellarSdk.xdr.PublicKey.publicKeyTypeEd25519(
     kp.rawPublicKey(),
   );
   const addr = StellarSdk.xdr.ScAddress.scAddressTypeAccount(accountId);
@@ -101,6 +102,10 @@ describe('StellarIndexerService (BE-001)', () => {
 
     eventEmitter = { emit: jest.fn() };
 
+    const multiOutcomeService = {
+      handleEvent: jest.fn().mockResolvedValue(undefined),
+    };
+
     callRepo = { find: jest.fn().mockResolvedValue([]) };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -110,6 +115,7 @@ describe('StellarIndexerService (BE-001)', () => {
         { provide: CallEventStoreService, useValue: callEventStore },
         { provide: SorobanRpcClient, useValue: rpcClient },
         { provide: EventEmitter2, useValue: eventEmitter },
+        { provide: MultiOutcomeEventService, useValue: multiOutcomeService },
       ],
     }).compile();
 
@@ -207,7 +213,7 @@ describe('StellarIndexerService (BE-001)', () => {
     rpcClient.getLatestLedger
       .mockRejectedValueOnce(new Error('network error'))
       .mockRejectedValueOnce(new Error('network error'))
-      .mockResolvedValue({ sequence: 200, id: '', protocolVersion: 0 });
+      .mockResolvedValue({ sequence: 200, id: '', protocolVersion: '0' });
 
     // Should not throw
     await expect(service.start()).resolves.toBeUndefined();
@@ -215,9 +221,7 @@ describe('StellarIndexerService (BE-001)', () => {
     await service.stop();
 
     // Eventually recovered and fetched
-    expect(rpcClient.getLatestLedger).toHaveBeenCalledTimes(
-      expect.any(Number),
-    );
+    expect(rpcClient.getLatestLedger).toHaveBeenCalled();
   });
 
   it('skips a bad event and continues processing the rest', async () => {

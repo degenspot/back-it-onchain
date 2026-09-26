@@ -11,6 +11,7 @@ import { useState, useEffect } from "react";
 import { Loader } from "@/components/ui/Loader";
 import dynamic from "next/dynamic";
 import { dynamicSkeleton } from "@/src/lib/perf";
+import { WidgetErrorBoundary } from "@/src/components/WidgetErrorBoundary";
 const PriceChart = dynamic(() => import("@/components/PriceChart").then((m) => m.PriceChart), {
   ssr: false,
   loading: () => dynamicSkeleton({ loaderLabel: "Loading price chart...", minHeight: 300 }),
@@ -20,7 +21,10 @@ import { MarketDetailSkeleton } from "@/components/MarketDetailSkeleton";
 import { MarketDetailRightSidebarSkeleton } from "@/components/MarketDetailRightSidebarSkeleton";
 import { PoolBar } from "@/src/components/PoolBar";
 import { ParticipantList } from "@/src/components/ParticipantList";
-import { createMockCallSocket, useCallLive } from "@/src/hooks/useCallLive";
+import { CallCountdownTimeline } from "@/src/components/CallCountdownTimeline";
+import { DisputeThread } from "@/src/components/DisputeThread";
+import { createMockCallSocket, useCallLive, poolSplit } from "@/src/hooks/useCallLive";
+import { LiveRegion } from "@/src/components/LiveRegion";
 import * as Dialog from "@radix-ui/react-dialog";
 import { toast } from "sonner";
 
@@ -76,6 +80,13 @@ export default function CallDetailPage() {
     );
 
     const live = useCallLive(id ?? '', { socketFactory });
+
+    // Quantised to whole percents: announcing every fractional socket tick
+    // would make the region chatter and drown out anything else being read.
+    const { yesPercent } = poolSplit(live.pool);
+    const poolAnnouncement = live.connected
+        ? `Live pool updated: ${Math.round(yesPercent)} percent backing`
+        : '';
 
     const stepLabels: Record<string, string> = {
         idle: "",
@@ -217,6 +228,13 @@ export default function CallDetailPage() {
 
                         <PoolBar pool={live.pool} />
 
+                        {/*
+                          The bar above moves silently as socket updates land.
+                          This announces the new split so screen reader users
+                          learn the pool changed without polling the page.
+                        */}
+                        <LiveRegion message={poolAnnouncement} />
+
                         <div className="flex flex-col gap-2">
                             <span className="text-sm text-muted-foreground">Participants</span>
                             <ParticipantList participants={live.participants} />
@@ -310,12 +328,20 @@ export default function CallDetailPage() {
 
             <div className="p-6">
                 <section className="mb-8">
-                    <PriceChart
-                        asset={call.asset || "Unknown"}
-                        target={call.target || "TBD"}
-                        startPrice={startPrice}
-                        targetPrice={targetPrice}
-                    />
+                    {/*
+                      Charting runs against live market data and a canvas
+                      renderer, so it is the most likely thing on this page to
+                      throw. Isolating it keeps the stake and activity controls
+                      below usable when it does.
+                    */}
+                    <WidgetErrorBoundary widget="Chart">
+                        <PriceChart
+                            asset={call.asset || "Unknown"}
+                            target={call.target || "TBD"}
+                            startPrice={startPrice}
+                            targetPrice={targetPrice}
+                        />
+                    </WidgetErrorBoundary>
                 </section>
 
                 <div className="mb-6">
@@ -356,6 +382,10 @@ export default function CallDetailPage() {
                             </span>
                         </div>
                     </div>
+                </section>
+
+                <section className="mb-8">
+                    <CallCountdownTimeline status={call.status} deadline={call.deadline || call.endTs} onExpired={() => setIsFetching(false)} />
                 </section>
 
                 {/* Action Buttons */}
@@ -467,6 +497,10 @@ export default function CallDetailPage() {
                         <h3 className="text-xl font-bold">Recent Activity</h3>
                     </div>
                     <ActivityLog />
+                </section>
+
+                <section className="mb-8">
+                    <DisputeThread callId={id} />
                 </section>
 
                 <div className="flex items-center justify-between border-y border-border py-4">

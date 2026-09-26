@@ -1,0 +1,39 @@
+{
+  "Common": {
+    "explore": "استكشاف",
+    "language_selector": "اللغة"
+  },
+  "Landing": {
+    "heroTitle": "توقّع المستقبل. وادعمه على السلسلة.",
+    "heroSub": "طبقة التوقعات الاجتماعية لـ Stellar و Base.",
+    "live": "يعمل الآن على Base Sepolia",
+    "features": {
+      "create": {
+        "title": "إنشاء التوقعات",
+        "description": "توقّع حركة الأسعار عبر إنشاء توقعات بأسعار مستهدفة وأطر زمنية."
+      },
+      "stake": {
+        "title": "راهن بسمعتك",
+        "description": "ادعم توقعات المستخدمين الآخرين لبناء سمعتك وإظهار قناعتك."
+      },
+      "earn": {
+        "title": "اربح المكافآت",
+        "description": "اربح المكافآت عندما تكون توقعاتك صحيحة — سمعة وأرباح."
+      }
+    }
+  },
+  "Nav": {
+    "home": "الرئيسية",
+    "explore": "استكشاف",
+    "leaderboard": "لوحة المتصدرين",
+    "create": "إنشاء",
+    "portfolio": "المحفظة",
+    "activity": "النشاط",
+    "profile": "الملف الشخصي",
+    "connect_stellar": "ربط Stellar"
+  },
+  "Navbar": {
+    "title": "Back It (Onchain)",
+    "wallet_settings": "إعدادات المحفظة"
+  }
+}

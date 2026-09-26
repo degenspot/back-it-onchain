@@ -10,6 +10,7 @@
 import * as React from 'react';
 import { AppLayout } from '@/components/AppLayout';
 import { NotificationBell } from '@/src/components/NotificationBell';
+import { NotificationPreferences } from '@/src/components/NotificationPreferences';
 
 export default function NotificationsPage() {
   return (
@@ -24,6 +25,8 @@ export default function NotificationsPage() {
           Real-time updates arrive over your notification channel; the list refreshes on a
           fallback poll if that channel is unavailable.
         </p>
+
+        <NotificationPreferences />
       </div>
     </AppLayout>
   );

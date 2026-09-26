@@ -99,7 +99,16 @@ describe('IndexerLockService (BE-004)', () => {
     });
 
     it('steps down and returns false when pexpire returns 0 (key expired)', async () => {
-      const { service } = makeService({ pexpire: jest.fn().mockResolvedValue(0) });
+      // Fake timers so the standby retry timer created after the step-down is
+      // deterministic and can be cleared on destroy.
+      jest.useFakeTimers();
+      // Acquire succeeds once ('OK'), then is refused so the re-entrant
+      // acquire loop stays a standby instead of regaining leadership —
+      // otherwise the renew interval restarts and runs forever.
+      const { service } = makeService({
+        set: jest.fn().mockResolvedValueOnce('OK').mockResolvedValue(null),
+        pexpire: jest.fn().mockResolvedValue(0),
+      });
       await service.acquire();
       (service as unknown as { isLeader: boolean }).isLeader = true;
 
@@ -110,6 +119,9 @@ describe('IndexerLockService (BE-004)', () => {
       expect(result).toBe(false);
       expect(lostCb).toHaveBeenCalled();
       expect(service.isCurrentLeader()).toBe(false);
+
+      // Tear the service down so no timers (real or fake) are left dangling.
+      await service.onModuleDestroy();
     });
   });
 

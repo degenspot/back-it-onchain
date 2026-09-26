@@ -604,3 +604,133 @@ fn test_overturn_outcome_slashes_oracle_bond_to_treasury() {
     assert_eq!(stake_token_client.balance(&treasury), 500i128);
     assert_eq!(stake_token_client.balance(&contract_id), 0i128);
 }
+
+// ── SC-012: compute_multi_outcome_payout ──────────────────────────────────────
+
+use crate::compute_multi_outcome_payout;
+
+#[test]
+fn test_multi_outcome_payout_matches_binary_formula() {
+    // With a single losing pool, this must match the existing binary formula
+    // used by withdraw_payout: stake + (stake * losing) / winning.
+    let (payout, protocol_fee, creator_fee) = compute_multi_outcome_payout(100, 1000, &[500], 0, 0);
+    assert_eq!(protocol_fee, 0);
+    assert_eq!(creator_fee, 0);
+    assert_eq!(payout, 100 + (100 * 500) / 1000);
+}
+
+#[test]
+fn test_multi_outcome_payout_sums_multiple_losing_pools() {
+    // Three outcomes: winner has 1000, two losers have 300 and 200 (500 total).
+    let (payout, _protocol_fee, _creator_fee) =
+        compute_multi_outcome_payout(100, 1000, &[300, 200], 0, 0);
+    assert_eq!(payout, 100 + (100 * 500) / 1000);
+}
+
+#[test]
+fn test_multi_outcome_payout_deducts_fees_before_distribution() {
+    // losing_pool_gross = 1000; protocol 1% = 10, creator 0.5% = 5.
+    // losing_pool_net = 985. User has half the 2000 winning pool.
+    let (payout, protocol_fee, creator_fee) =
+        compute_multi_outcome_payout(1000, 2000, &[1000], 100, 50);
+    assert_eq!(protocol_fee, 10);
+    assert_eq!(creator_fee, 5);
+    assert_eq!(payout, 1000 + (1000 * 985) / 2000);
+}
+
+#[test]
+fn test_multi_outcome_payout_zero_stake_yields_zero() {
+    assert_eq!(
+        compute_multi_outcome_payout(0, 1000, &[500], 100, 50),
+        (0, 0, 0)
+    );
+}
+
+#[test]
+#[should_panic(expected = "winning_pool must be > 0")]
+fn test_multi_outcome_payout_zero_winning_pool_with_stake_panics() {
+    compute_multi_outcome_payout(100, 0, &[500], 0, 0);
+}
+
+/// Conservation invariant, run across many (deterministic, LCG-generated)
+/// scenarios: the sum of all winners' payouts, plus protocol fee, plus
+/// creator fee, equals exactly winning_pool + losing_pool_gross - dust,
+/// where dust is the (non-negative, bounded) truncation lost to integer
+/// division. No tokens are ever fabricated, and dust is always < the
+/// number of winners (each winner can lose at most 1 unit to truncation).
+#[test]
+fn test_multi_outcome_payout_conservation_invariant_10000_iterations() {
+    const MAX_WINNERS: usize = 5;
+    const MAX_LOSING_POOLS: usize = 4;
+
+    let mut seed: u64 = 42;
+    let mut next = || {
+        // Simple LCG — deterministic, no external `rand` dependency needed.
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (seed >> 33) as i128
+    };
+
+    for _ in 0..10_000 {
+        let num_winners = 1 + (next() % MAX_WINNERS as i128) as usize;
+        let winning_pool = 1_000 + (next() % 1_000_000);
+        let num_losing_pools = 1 + (next() % MAX_LOSING_POOLS as i128) as usize;
+
+        let mut losing_pools = [0i128; MAX_LOSING_POOLS];
+        let mut losing_pool_gross = 0i128;
+        for slot in losing_pools.iter_mut().take(num_losing_pools) {
+            let pool = next() % 500_000;
+            *slot = pool;
+            losing_pool_gross += pool;
+        }
+        let losing_pools_slice = &losing_pools[..num_losing_pools];
+
+        let protocol_fee_bps = next() % 300; // up to 3%
+        let creator_fee_bps = next() % 100; // up to 1%
+
+        // Split winning_pool across winners as individual stakes summing to it.
+        let mut stakes = [0i128; MAX_WINNERS];
+        let mut remaining = winning_pool;
+        for (i, slot) in stakes.iter_mut().take(num_winners).enumerate() {
+            let stake = if i == num_winners - 1 {
+                remaining
+            } else {
+                let s = remaining / 2;
+                remaining -= s;
+                s
+            };
+            *slot = stake;
+        }
+
+        let mut total_payout = 0i128;
+        let mut protocol_fee_total = 0i128;
+        let mut creator_fee_total = 0i128;
+        for &stake in stakes.iter().take(num_winners) {
+            let (payout, protocol_fee, creator_fee) = compute_multi_outcome_payout(
+                stake,
+                winning_pool,
+                losing_pools_slice,
+                protocol_fee_bps,
+                creator_fee_bps,
+            );
+            total_payout += payout;
+            // Fees are computed per-call from the same losing_pool_gross, so
+            // they're identical across winners in this test — just capture
+            // once rather than summing duplicates.
+            protocol_fee_total = protocol_fee;
+            creator_fee_total = creator_fee;
+        }
+
+        let losing_pool_net = losing_pool_gross - protocol_fee_total - creator_fee_total;
+        let expected_total = winning_pool + losing_pool_net;
+        let dust = expected_total - total_payout;
+
+        assert!(
+            dust >= 0 && dust < num_winners as i128,
+            "dust {} out of bounds for {} winners (winning_pool={}, losing_pool_gross={})",
+            dust,
+            num_winners,
+            winning_pool,
+            losing_pool_gross
+        );
+    }
+}

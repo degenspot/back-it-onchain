@@ -1,0 +1,39 @@
+{
+  "Common": {
+    "explore": "探索",
+    "language_selector": "语言"
+  },
+  "Landing": {
+    "heroTitle": "预测未来，链上押注。",
+    "heroSub": "面向 Stellar 与 Base 的社交预测层。",
+    "live": "已在 Base Sepolia 上线",
+    "features": {
+      "create": {
+        "title": "创建预测",
+        "description": "通过设定目标价格和时间范围创建预测，判断价格走势。"
+      },
+      "stake": {
+        "title": "质押信誉",
+        "description": "支持其他用户的预测，积累信誉并表达你的信心。"
+      },
+      "earn": {
+        "title": "赢取奖励",
+        "description": "预测正确即可赢得奖励 — 包括信誉与收益。"
+      }
+    }
+  },
+  "Nav": {
+    "home": "首页",
+    "explore": "探索",
+    "leaderboard": "排行榜",
+    "create": "创建",
+    "portfolio": "投资组合",
+    "activity": "动态",
+    "profile": "个人资料",
+    "connect_stellar": "连接 Stellar"
+  },
+  "Navbar": {
+    "title": "Back It (Onchain)",
+    "wallet_settings": "钱包设置"
+  }
+}

@@ -6,6 +6,7 @@ import {
   type AppNotification,
   type UseNotificationsOptions,
 } from '../hooks/useNotificationsSocket';
+import { useNotificationPreferences } from '../hooks/useNotificationPreferences';
 
 export interface NotificationBellProps extends UseNotificationsOptions {
   userId?: string;
@@ -75,8 +76,9 @@ export function NotificationRow({
  */
 export function NotificationBell({ userId, maxBadgeCount = 99, ...options }: NotificationBellProps) {
   const [open, setOpen] = React.useState(false);
+  const { preferences } = useNotificationPreferences();
   const { notifications, unreadCount, connected, isLoading, error, markAsRead, markAllAsRead, dismiss } =
-    useNotificationsSocket(userId, options);
+    useNotificationsSocket(userId, { ...options, preferences });
 
   const now = Date.now();
 

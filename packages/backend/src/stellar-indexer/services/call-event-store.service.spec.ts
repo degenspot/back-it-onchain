@@ -49,7 +49,6 @@ describe('CallEventStoreService (BE-002 / BE-004)', () => {
     find: jest.Mock;
     create: jest.Mock;
     save: jest.Mock;
-    findOne: jest.Mock;
   };
   let dataSource: { createQueryRunner: jest.Mock };
   let qrMock: ReturnType<typeof makeQueryRunner>;

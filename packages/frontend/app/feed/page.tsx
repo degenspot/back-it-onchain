@@ -7,6 +7,7 @@ import { CallCard } from "@/components/CallCard";
 import { CallCardSkeleton } from "@/components/CallCardSkeleton";
 import { type Call, type User } from "@/lib/types";
 import { FeedPersonalize } from "@/src/components/FeedPersonalize";
+import { useFeedWorker } from "@/src/hooks/useFeedWorker";
 
 
 const API_BASE_URL = (
@@ -58,6 +59,7 @@ export default function FeedPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const processedCalls = useFeedWorker(calls, true);
 
   const fetchPage = useCallback(
     async (tab: "for-you" | "following", pageOffset: number) => {
@@ -148,7 +150,10 @@ export default function FeedPage() {
     <AppLayout rightSidebar={RightSidebar}>
       <div className="p-4">
         {/* Tabs */}
-        <div className="flex gap-6 mb-6 border-b border-border px-2">
+        <div
+          className="flex gap-6 mb-6 border-b border-border px-2"
+          data-testid="feed-tabs"
+        >
           <button
             onClick={() => setActiveTab("for-you")}
             className={`pb-3 border-b-2 font-bold transition-colors ${
@@ -172,16 +177,19 @@ export default function FeedPage() {
         </div>
 
         {/* Feed */}
-        <div className="space-y-4">
-          {calls.length === 0 && !isLoading && (
-            <div className="text-center py-10 text-muted-foreground">
+        <div className="space-y-4" data-testid="feed-list">
+          {processedCalls.length === 0 && !isLoading && (
+            <div
+              className="text-center py-10 text-muted-foreground"
+              data-testid="feed-empty"
+            >
               {activeTab === "following"
                 ? "Follow users to see their calls here."
                 : "No calls found."}
             </div>
           )}
 
-          {calls.map((call) => (
+          {processedCalls.map((call) => (
             <CallCard key={call.id} call={call} />
           ))}
 
@@ -195,7 +203,7 @@ export default function FeedPage() {
           <div ref={sentinelRef} className="h-1" />
 
           {/* End of feed */}
-          {!hasMore && calls.length > 0 && (
+          {!hasMore && processedCalls.length > 0 && (
             <p className="text-center py-6 text-sm text-muted-foreground">
               You&apos;ve reached the end of the feed.
             </p>

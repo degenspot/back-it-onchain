@@ -1,9 +1,4 @@
-/**
- * Reputation timeline + history export helpers (FE-07).
- *
- * Everything here is pure so the chart and the export button can be tested
- * without a canvas or a download.
- */
+import type { RadarAxis } from './analytics-utils';
 
 export type CallOutcome = 'won' | 'lost' | 'open';
 
@@ -21,6 +16,8 @@ export interface CallHistoryEntry {
   createdAt: string;
   resolvedAt?: string;
   note?: string;
+  predictedProbability?: number;
+  category?: string;
 }
 
 export interface TimelinePoint {
@@ -188,4 +185,64 @@ export function exportFilename(wallet: string, format: ExportFormat, isoDate: st
   const safeWallet = wallet.replace(/[^a-zA-Z0-9]/g, '').slice(0, 12) || 'wallet';
 
   return `backitonchain-history-${safeWallet}-${isoDate.slice(0, 10)}.${format}`;
+}
+
+export type ReputationMetricKey = 'accuracy' | 'volume' | 'conviction' | 'brier' | 'breadth' | 'recency';
+
+export interface ReputationMetrics {
+  accuracy: number;
+  volume: number;
+  conviction: number;
+  brier: number;
+  breadth: number;
+  recency: number;
+}
+
+export function calculateBrierScore(entries: CallHistoryEntry[]): number {
+  const scored = entries.filter((entry) => typeof entry.predictedProbability === 'number' && entry.outcome !== 'open');
+  if (scored.length === 0) return 0.5;
+  const score = scored.reduce((total, entry) => {
+    const probability = Math.min(1, Math.max(0, entry.predictedProbability as number));
+    const actual = entry.outcome === 'won' ? 1 : 0;
+    return total + Math.pow(probability - actual, 2);
+  }, 0) / scored.length;
+  return Math.min(1, Math.max(0, score));
+}
+
+export function percentileRank(value: number, population: number[]): number {
+  if (population.length === 0) return 0;
+  const below = population.filter((entry) => entry <= value).length;
+  return Math.round((below / population.length) * 100);
+}
+
+export function buildReputationMetrics(entries: CallHistoryEntry[], population: Partial<Record<ReputationMetricKey, number[]>> = {}): ReputationMetrics {
+  const resolved = entries.filter((entry) => entry.outcome !== 'open');
+  const wins = resolved.filter((entry) => entry.outcome === 'won').length;
+  const accuracy = resolved.length === 0 ? 0 : wins / resolved.length;
+  const volume = entries.reduce((total, entry) => total + Math.max(0, entry.stake), 0);
+  const conviction = entries.length === 0 ? 0 : entries.reduce((total, entry) => total + Math.min(1, entry.stake / 1000), 0) / entries.length;
+  const brier = calculateBrierScore(entries);
+  const breadth = new Set(entries.map((entry) => entry.category).filter(Boolean)).size;
+  const latest = entries.length === 0 ? 0 : Math.max(...entries.map((entry) => Date.parse(effectiveDate(entry)) || 0));
+  const recency = latest === 0 ? 0 : Math.exp(-Math.max(0, Date.now() - latest) / (1000 * 60 * 60 * 24 * 90));
+  const scale = (value: number, values?: number[]): number => values && values.length > 0 ? percentileRank(value, values) : Math.min(100, Math.max(0, value * 100));
+  return {
+    accuracy: scale(accuracy, population.accuracy),
+    volume: scale(volume, population.volume),
+    conviction: scale(conviction, population.conviction),
+    brier: scale(1 - brier, population.brier),
+    breadth: scale(breadth, population.breadth),
+    recency: scale(recency, population.recency),
+  };
+}
+
+export function metricsToRadarAxes(metrics: ReputationMetrics): RadarAxis[] {
+  return [
+    { label: 'Accuracy', value: metrics.accuracy },
+    { label: 'Volume', value: metrics.volume },
+    { label: 'Conviction', value: metrics.conviction },
+    { label: 'Brier calibration', value: metrics.brier },
+    { label: 'Category breadth', value: metrics.breadth },
+    { label: 'Recency', value: metrics.recency },
+  ];
 }

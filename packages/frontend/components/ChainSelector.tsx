@@ -35,7 +35,7 @@ export function ChainSelector() {
   const currentChain = chains.find((c) => c.id === selectedChain) || chains[0];
 
   return (
-    <div className="relative" ref={dropdownRef}>
+    <div className="relative" ref={dropdownRef} data-testid="chain-selector">
       <button
         onClick={() => setIsOpen(!isOpen)}
         className={`select-none flex items-center gap-6 px-3 py-2 rounded-full border transition-all duration-300 backdrop-blur-md ${selectedChain === "base"

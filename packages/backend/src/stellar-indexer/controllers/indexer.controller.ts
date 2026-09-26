@@ -1,7 +1,8 @@
-import { Controller, Get, Post, Body, Param } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Header } from '@nestjs/common';
 import { MultiChainIndexerService } from '../services/multi-chain-indexer.service';
 import { StellarIndexerService } from '../services/stellar-indexer.service';
 import { BaseIndexerService } from '../services/base-indexer.service';
+import { RpcCircuitBreakerService } from '../services/rpc-circuit-breaker.service';
 
 @Controller('indexer')
 export class IndexerController {
@@ -9,7 +10,28 @@ export class IndexerController {
     private readonly multiChainIndexer: MultiChainIndexerService,
     private readonly stellarIndexer: StellarIndexerService,
     private readonly baseIndexer: BaseIndexerService,
+    private readonly rpcCircuitBreaker: RpcCircuitBreakerService,
   ) {}
+
+  /**
+   * Per-endpoint RPC health (BE-007). Shows which endpoint is currently
+   * serving, each breaker's state, and how far behind each node is.
+   */
+  @Get('rpc/health')
+  getRpcHealth() {
+    return {
+      available: this.rpcCircuitBreaker.isAvailable(),
+      activeEndpoint: this.rpcCircuitBreaker.activeEndpoint(),
+      endpoints: this.rpcCircuitBreaker.snapshot(),
+    };
+  }
+
+  /** Prometheus scrape target for the RPC breaker metrics (BE-007). */
+  @Get('rpc/metrics')
+  @Header('content-type', 'text/plain; version=0.0.4; charset=utf-8')
+  getRpcMetrics(): string {
+    return this.rpcCircuitBreaker.toPrometheus();
+  }
 
   @Post('stellar/initialize')
   async initializeStellarIndexer(@Body() config: any) {

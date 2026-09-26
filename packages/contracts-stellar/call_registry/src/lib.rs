@@ -810,6 +810,172 @@ impl CallRegistry {
         call_id
     }
 
+    /// Create a call, splitting the creator's initial stake across multiple
+    /// designated outcomes rather than placing it all on outcome 0 (SC-003).
+    ///
+    /// `initial_allocations[i]` is the amount allocated to outcome `i` and
+    /// must sum to exactly `stake_amount`. Individual `UserStake(call_id,
+    /// creator, i)` entries are recorded for every outcome with a non-zero
+    /// allocation, so the creator's per-outcome position is queryable the
+    /// same way a regular staker's is.
+    ///
+    /// # Panics
+    /// - `"initial_allocations length must equal num_outcomes"` if the
+    ///   vector's length doesn't match `metadata.num_outcomes`.
+    /// - `"initial_allocations must not contain negative amounts"` if any
+    ///   entry is negative.
+    /// - `"initial_allocations must sum to stake_amount"` unless the entries
+    ///   sum to exactly `stake_amount`.
+    pub fn create_call_with_allocations(
+        env: Env,
+        creator: Address,
+        stake_token: Address,
+        stake_amount: i128,
+        end_ts: u64,
+        metadata: CreateCallMetadata,
+        initial_allocations: Vec<i128>,
+    ) -> u64 {
+        Self::assert_not_paused(&env);
+        Self::assert_token_whitelisted(&env, &stake_token);
+        creator.require_auth();
+
+        if end_ts <= env.ledger().timestamp() {
+            panic!("End time must be in future");
+        }
+        if stake_amount <= 0 {
+            panic!("Amount must be greater than zero");
+        }
+        if metadata.num_outcomes < MIN_OUTCOMES {
+            panic!("Must have at least 2 outcomes");
+        }
+        if metadata.num_outcomes > MAX_OUTCOMES {
+            panic!("Too many outcomes");
+        }
+        if initial_allocations.len() != metadata.num_outcomes {
+            panic!("initial_allocations length must equal num_outcomes");
+        }
+
+        let mut allocation_sum: i128 = 0;
+        for i in 0..initial_allocations.len() {
+            let allocation = initial_allocations.get(i).unwrap();
+            if allocation < 0 {
+                panic!("initial_allocations must not contain negative amounts");
+            }
+            allocation_sum = allocation_sum
+                .checked_add(allocation)
+                .expect("Arithmetic overflow");
+        }
+        if allocation_sum != stake_amount {
+            panic!("initial_allocations must sum to stake_amount");
+        }
+
+        // Transfer stake from creator to contract (SAC escrow with
+        // balance-delta guard — see create_call for rationale).
+        let token_client = token::Client::new(&env, &stake_token);
+        let balance_before = token_client.balance(&env.current_contract_address());
+        token_client.transfer(&creator, &env.current_contract_address(), &stake_amount);
+        let balance_after = token_client.balance(&env.current_contract_address());
+        let net_amount = balance_after - balance_before;
+        if net_amount <= 0 {
+            panic!("Amount must be greater than zero");
+        }
+
+        // If the token charges a transfer fee, net_amount < stake_amount.
+        // Scale each allocation proportionally so the pools still sum to
+        // net_amount exactly (same balance-delta discipline as create_call).
+        let scale_allocations = net_amount != stake_amount;
+
+        Self::vault_deposit(&env, &stake_token, net_amount);
+
+        let call_id = env
+            .storage()
+            .instance()
+            .get(&DataKey::NextCallId)
+            .unwrap_or(0u64);
+        env.storage()
+            .instance()
+            .set(&DataKey::NextCallId, &(call_id + 1));
+
+        let start_ts = env.ledger().timestamp();
+
+        let mut outcome_pools = Vec::new(&env);
+        let mut net_allocations: Vec<i128> = Vec::new(&env);
+        let mut net_allocated_sum: i128 = 0;
+        for i in 0..initial_allocations.len() {
+            let allocation = initial_allocations.get(i).unwrap();
+            let net_allocation = if scale_allocations {
+                (allocation * net_amount) / stake_amount
+            } else {
+                allocation
+            };
+            outcome_pools.push_back(net_allocation);
+            net_allocations.push_back(net_allocation);
+            net_allocated_sum += net_allocation;
+        }
+        // Any remainder from integer-division scaling lands on the last
+        // outcome so pools still sum to net_amount exactly.
+        if scale_allocations && net_allocated_sum != net_amount {
+            let last_index = outcome_pools.len() - 1;
+            let last_value = outcome_pools.get(last_index).unwrap();
+            let corrected = last_value + (net_amount - net_allocated_sum);
+            outcome_pools.set(last_index, corrected);
+            net_allocations.set(last_index, corrected);
+        }
+
+        let call = Call {
+            creator: creator.clone(),
+            stake_token: stake_token.clone(),
+            outcome_pools,
+            start_ts,
+            end_ts,
+            token_address: metadata.token_address.clone(),
+            pair_id: metadata.pair_id.clone(),
+            ipfs_cid: metadata.ipfs_cid.clone(),
+            settled: false,
+            winning_outcome: u32::MAX,
+            final_price: 0,
+            vault_balance: net_amount,
+            participant_count: 1,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Call(call_id), &call);
+
+        let call_key = DataKey::Call(call_id);
+        bump_persistent_ttl(&env, &call_key);
+
+        for i in 0..net_allocations.len() {
+            let net_allocation = net_allocations.get(i).unwrap();
+            if net_allocation > 0 {
+                let creator_stake_key = DataKey::UserStake(call_id, creator.clone(), i);
+                env.storage()
+                    .persistent()
+                    .set(&creator_stake_key, &net_allocation);
+                bump_persistent_ttl(&env, &creator_stake_key);
+            }
+        }
+
+        env.events().publish(
+            (
+                Symbol::new(&env, "CallCreatedWithAllocations"),
+                call_id,
+                creator,
+            ),
+            (
+                stake_token,
+                stake_amount,
+                net_amount,
+                start_ts,
+                end_ts,
+                metadata.num_outcomes,
+                net_allocations,
+            ),
+        );
+
+        call_id
+    }
+
     /// Stake on an existing call.
     /// Applies a dynamic surge fee based on participant count (issue #161).
     /// Net stake (after fee) is deposited into the vault (issue #159).

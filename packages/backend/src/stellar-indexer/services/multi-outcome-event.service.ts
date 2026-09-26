@@ -497,7 +497,7 @@ export class MultiOutcomeEventService {
       const creator = String(source['creator'] ?? '');
       const rawOutcomes = source['outcomes'] ?? source['outcome_labels'] ?? [];
       const outcomes = Array.isArray(rawOutcomes)
-        ? rawOutcomes.slice(0, MAX_OUTCOMES).map(String)
+        ? rawOutcomes.map(String)
         : [String(rawOutcomes)];
 
       if (!call_id) return null;

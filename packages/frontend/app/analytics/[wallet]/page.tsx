@@ -44,7 +44,7 @@ export default function AnalyticsPage() {
             <h2 className="mb-3 text-sm font-semibold text-white">
               Accuracy over time
             </h2>
-            <AccuracyChart data={data.accuracy} />
+            <AccuracyChart data={data.accuracy} pnlData={data.pnl} />
           </section>
 
           <section className="rounded-xl border border-white/10 bg-zinc-900/40 p-4 md:col-span-2">

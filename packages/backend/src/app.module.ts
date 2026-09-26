@@ -40,11 +40,15 @@ import { AdminModule } from './admin/admin.module';
 import { HealthModule } from './health/health.module';
 import { TokensModule } from './tokens/tokens.module';
 import { RelayerModule } from './indexer/relayer.module';
+import { stellarConfig } from './config/stellar.config';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      // Registers the `stellar` namespace so RpcCircuitBreakerService reads
+      // real configuration instead of silently falling back to defaults.
+      load: [stellarConfig],
       validationSchema,
       validationOptions: {
         allowUnknown: true,

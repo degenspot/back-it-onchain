@@ -136,6 +136,10 @@ export class IndexerLockService implements OnModuleInit, OnModuleDestroy {
 
     const acquired = await this.acquire();
 
+    // Destroyed while the acquire was in flight (e.g. onModuleDestroy racing
+    // stepDown's re-entry) — do not claim leadership or start the renew loop.
+    if (this.destroyed) return;
+
     if (acquired) {
       this.isLeader = true;
       this.logger.log(`Leadership acquired (token=${this.token?.slice(0, 8)}...)`);

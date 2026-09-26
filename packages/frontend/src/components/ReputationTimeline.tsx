@@ -11,6 +11,7 @@ import {
 } from '../lib/reputation';
 
 export type TimelineMetric = 'reputation' | 'pnl';
+export type TimelineRange = '1W' | '1M' | '3M' | '1Y' | 'ALL';
 
 /** The slice of lightweight-charts this component uses, so tests can fake it. */
 export interface ChartSeriesHandle {
@@ -38,6 +39,8 @@ export interface ReputationTimelineProps {
   height?: number;
   metric?: TimelineMetric;
   onMetricChange?: (metric: TimelineMetric) => void;
+  range?: TimelineRange;
+  onRangeChange?: (range: TimelineRange) => void;
   chartFactory?: ChartFactory;
   seriesDefinition?: unknown;
 }
@@ -72,6 +75,8 @@ export function ReputationTimeline({
   height = 220,
   metric: controlledMetric,
   onMetricChange,
+  range: controlledRange,
+  onRangeChange,
   chartFactory = defaultChartFactory,
   seriesDefinition = AreaSeries,
 }: ReputationTimelineProps) {
@@ -80,16 +85,24 @@ export function ReputationTimeline({
   const chartRef = React.useRef<ChartHandle | null>(null);
 
   const [uncontrolledMetric, setUncontrolledMetric] = React.useState<TimelineMetric>('reputation');
+  const [uncontrolledRange, setUncontrolledRange] = React.useState<TimelineRange>('ALL');
   const metric = controlledMetric ?? uncontrolledMetric;
+  const range = controlledRange ?? uncontrolledRange;
+  const filteredEntries = React.useMemo(() => {
+    if (range === 'ALL') return entries;
+    const days = range === '1W' ? 7 : range === '1M' ? 30 : range === '3M' ? 90 : 365;
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+    return entries.filter((entry) => Date.parse(entry.resolvedAt ?? entry.createdAt) >= cutoff);
+  }, [entries, range]);
 
-  const summary = React.useMemo(() => summarize(entries, currentScore), [entries, currentScore]);
+  const summary = React.useMemo(() => summarize(filteredEntries, currentScore), [currentScore, filteredEntries]);
 
   const data = React.useMemo(
     () =>
       metric === 'reputation'
-        ? buildReputationSeries(entries, startingScore)
-        : buildPnlSeries(entries),
-    [entries, metric, startingScore],
+        ? buildReputationSeries(filteredEntries, startingScore)
+        : buildPnlSeries(filteredEntries),
+    [filteredEntries, metric, startingScore],
   );
 
   React.useEffect(() => {
@@ -122,6 +135,11 @@ export function ReputationTimeline({
     onMetricChange?.(next);
   };
 
+  const selectRange = (next: TimelineRange) => {
+    setUncontrolledRange(next);
+    onRangeChange?.(next);
+  };
+
   return (
     <section data-testid="reputation-timeline" className="rounded-xl border border-border p-4">
       <div className="mb-4 flex items-center justify-between">
@@ -145,6 +163,12 @@ export function ReputationTimeline({
             </button>
           ))}
         </div>
+        <label className="flex items-center gap-1 text-xs text-muted-foreground">
+          Range
+          <select value={range} onChange={(event) => selectRange(event.target.value as TimelineRange)} className="rounded border border-border bg-background px-2 py-1 text-foreground">
+            {(['1W', '1M', '3M', '1Y', 'ALL'] as TimelineRange[]).map((option) => <option key={option}>{option}</option>)}
+          </select>
+        </label>
       </div>
 
       <dl className="mb-4 grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
@@ -187,7 +211,7 @@ export function ReputationTimeline({
         </p>
       ) : (
         <ol data-testid="timeline-history" className="mt-4 divide-y divide-border">
-          {[...entries].reverse().map((entry) => (
+          {[...filteredEntries].reverse().map((entry) => (
             <li
               key={entry.id}
               data-testid={`timeline-entry-${entry.id}`}

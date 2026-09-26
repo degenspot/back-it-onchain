@@ -7,5 +7,6 @@ mod roles;
 mod soulbound;
 mod storage;
 mod timelock;
+pub mod upgrade;
 
 pub use contract::*;

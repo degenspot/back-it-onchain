@@ -7,6 +7,7 @@ export interface AnalyticsData {
   reputation: RadarAxis[];
   /** Accuracy over time in the RawChartData shape so chart-utils can format it. */
   accuracy: RawChartData[];
+  pnl: RawChartData[];
   stakingVolume: { label: string; value: number }[];
 }
 
@@ -46,9 +47,10 @@ export function buildMockAnalytics(wallet: string): AnalyticsData {
   const reputation: RadarAxis[] = [
     { label: 'Accuracy', value: pick(40, 98) },
     { label: 'Volume', value: pick(30, 95) },
-    { label: 'Consistency', value: pick(35, 96) },
-    { label: 'Risk', value: pick(25, 90) },
-    { label: 'Community', value: pick(20, 92) },
+    { label: 'Conviction', value: pick(35, 96) },
+    { label: 'Brier calibration', value: pick(25, 90) },
+    { label: 'Category breadth', value: pick(20, 92) },
+    { label: 'Recency', value: pick(30, 98) },
   ];
 
   const now = Date.now();
@@ -59,12 +61,18 @@ export function buildMockAnalytics(wallet: string): AnalyticsData {
     return { timestamp: now - (29 - i) * day, price: Math.round(acc) };
   });
 
+  let pnlValue = 0;
+  const pnl: RawChartData[] = Array.from({ length: 30 }, (_, i) => {
+    pnlValue += Math.round((rand() * 80 - 30) * 100) / 100;
+    return { timestamp: now - (29 - i) * day, price: pnlValue };
+  });
+
   const stakingVolume = ['W1', 'W2', 'W3', 'W4', 'W5', 'W6'].map((label) => ({
     label,
     value: pick(50, 1000),
   }));
 
-  return { wallet, reputation, accuracy, stakingVolume };
+  return { wallet, reputation, accuracy, pnl, stakingVolume };
 }
 
 /**

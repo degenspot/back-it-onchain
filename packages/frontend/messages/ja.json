@@ -1,0 +1,39 @@
+{
+  "Common": {
+    "explore": "探索",
+    "language_selector": "言語"
+  },
+  "Landing": {
+    "heroTitle": "未来を予測し、オンチェーンで裏付ける。",
+    "heroSub": "Stellar と Base のためのソーシャル予測レイヤー。",
+    "live": "Base Sepolia で稼働中",
+    "features": {
+      "create": {
+        "title": "コールを作成",
+        "description": "目標価格と期間を設定したコールを作成し、価格の動きを予測します。"
+      },
+      "stake": {
+        "title": "評価をステーク",
+        "description": "他のユーザーのコールを支持して評価を築き、確信を示します。"
+      },
+      "earn": {
+        "title": "報酬を獲得",
+        "description": "予測が的中すると報酬を獲得できます — 評価と配当の両方。"
+      }
+    }
+  },
+  "Nav": {
+    "home": "ホーム",
+    "explore": "探索",
+    "leaderboard": "ランキング",
+    "create": "作成",
+    "portfolio": "ポートフォリオ",
+    "activity": "アクティビティ",
+    "profile": "プロフィール",
+    "connect_stellar": "Stellar を接続"
+  },
+  "Navbar": {
+    "title": "Back It (Onchain)",
+    "wallet_settings": "ウォレット設定"
+  }
+}

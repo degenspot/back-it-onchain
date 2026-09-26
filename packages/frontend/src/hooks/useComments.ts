@@ -29,7 +29,7 @@ const MOCK_COMMENTS: Comment[] = [
   },
 ];
 
-const MAX_DEPTH = 3;
+const MAX_DEPTH = 5;
 const MAX_CHARS = 300;
 
 export function useComments(callId: string) {
@@ -38,17 +38,21 @@ export function useComments(callId: string) {
 
   const addComment = useCallback((content: string, parentId: string | null = null) => {
     if (content.length > MAX_CHARS) return;
-    const newComment: Comment = {
-      id: String(Date.now()),
-      callId,
-      parentId,
-      author: "0xCurrentUser",
-      authorName: "You",
-      content,
-      createdAt: new Date().toISOString(),
-      depth: parentId ? 1 : 0,
-    };
-    setComments(prev => [...prev, newComment]);
+    setComments(prev => {
+      const parent = parentId ? prev.find(comment => comment.id === parentId) : undefined;
+      const depth = parent ? Math.min(MAX_DEPTH, parent.depth + 1) : 0;
+      const newComment: Comment = {
+        id: String(Date.now()),
+        callId,
+        parentId,
+        author: "0xCurrentUser",
+        authorName: "You",
+        content,
+        createdAt: new Date().toISOString(),
+        depth,
+      };
+      return [...prev, newComment];
+    });
   }, [callId]);
 
   const editComment = useCallback((id: string, content: string) => {

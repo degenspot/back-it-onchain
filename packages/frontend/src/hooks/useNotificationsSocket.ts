@@ -11,6 +11,7 @@
  */
 
 import * as React from 'react';
+import { notificationEventAllowed, type NotificationPreferences } from './useNotificationPreferences';
 
 export interface AppNotification {
   id: string;
@@ -55,6 +56,7 @@ export interface UseNotificationsOptions {
   pollIntervalMs?: number;
   backgroundPollIntervalMs?: number;
   enabled?: boolean;
+  preferences?: NotificationPreferences;
 }
 
 export interface UseNotificationsResult {
@@ -80,6 +82,7 @@ export function useNotificationsSocket(
     pollIntervalMs = POLL_INTERVAL_MS,
     backgroundPollIntervalMs = BACKGROUND_POLL_INTERVAL_MS,
     enabled = true,
+    preferences,
   } = options;
 
   const [notifications, setNotifications] = React.useState<AppNotification[]>([]);
@@ -88,14 +91,13 @@ export function useNotificationsSocket(
   const [error, setError] = React.useState<Error | null>(null);
 
   const upsert = React.useCallback((incoming: AppNotification) => {
+    if (preferences && !notificationEventAllowed(preferences, incoming.type, 'in_app')) return;
     setNotifications((current) => {
-      // A re-delivered notification is the same one, not a new one. Sockets
-      // redeliver on reconnect, and appending blindly would show duplicates.
       const without = current.filter((entry) => entry.id !== incoming.id);
 
       return [incoming, ...without];
     });
-  }, []);
+  }, [preferences]);
 
   // Socket subscription.
   React.useEffect(() => {
@@ -131,7 +133,10 @@ export function useNotificationsSocket(
           // Merge rather than replace: a notification pushed over the socket
           // moments ago may not be in this poll's response yet, and dropping
           // it would make it flicker out of the list.
-          const byId = new Map(fetched.map((entry) => [entry.id, entry]));
+          const allowed = preferences
+            ? fetched.filter((entry) => notificationEventAllowed(preferences, entry.type, 'in_app'))
+            : fetched;
+          const byId = new Map(allowed.map((entry) => [entry.id, entry]));
 
           for (const entry of current) {
             if (!byId.has(entry.id)) byId.set(entry.id, entry);
@@ -166,6 +171,7 @@ export function useNotificationsSocket(
     enabled,
     fetchNotifications,
     pollIntervalMs,
+    preferences,
     userId,
   ]);
 

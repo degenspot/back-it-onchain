@@ -1,9 +1,9 @@
 import { getRequestConfig } from "next-intl/server";
 import { cookies, headers } from "next/headers";
+import { LOCALES, DEFAULT_LOCALE } from "./locales";
 
-/** Locales with shipped translation files (FE-26). */
-export const LOCALES = ["en", "es", "de"] as const;
-export const DEFAULT_LOCALE = "en";
+// Re-exported for existing importers; the registry in ./locales is canonical.
+export { LOCALES, DEFAULT_LOCALE };
 
 /**
  * Resolve the active locale for server-rendered components.

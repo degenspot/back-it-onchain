@@ -3,6 +3,7 @@
 import React from 'react';
 import { type Call } from '../../lib/types';
 import { computeWindow } from '../hooks/useFeed';
+import { useFeedWorker } from '../hooks/useFeedWorker';
 
 /** Assumed row height for windowing, in px. */
 export const DEFAULT_ITEM_HEIGHT = 180;
@@ -33,6 +34,7 @@ export interface FeedListProps {
   itemHeight?: number;
   /** Row renderer; defaults to the call title. */
   renderCall?: (call: Call) => React.ReactNode;
+  enableWorker?: boolean;
 }
 
 /**
@@ -56,11 +58,14 @@ export function FeedList({
   virtualized,
   itemHeight = DEFAULT_ITEM_HEIGHT,
   renderCall,
+  enableWorker = false,
 }: FeedListProps) {
   const sentinelRef = React.useRef<HTMLDivElement | null>(null);
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
   const [scrollTop, setScrollTop] = React.useState(0);
   const [viewportHeight, setViewportHeight] = React.useState(0);
+  const workerCalls = useFeedWorker(calls, enableWorker);
+  const displayCalls = enableWorker ? workerCalls : calls;
 
   // Infinite scroll. An observer is used rather than a scroll handler so the
   // browser decides when the sentinel is near, and nothing runs per frame.
@@ -107,15 +112,15 @@ export function FeedList({
     );
   }
 
-  if (!calls || calls.length === 0) {
+  if (!displayCalls || displayCalls.length === 0) {
     return <div data-testid="empty-state">No calls found</div>;
   }
 
   const window = virtualized
-    ? computeWindow({ scrollTop, viewportHeight, itemHeight, itemCount: calls.length })
-    : { startIndex: 0, endIndex: calls.length, paddingTop: 0, paddingBottom: 0 };
+    ? computeWindow({ scrollTop, viewportHeight, itemHeight, itemCount: displayCalls.length })
+    : { startIndex: 0, endIndex: displayCalls.length, paddingTop: 0, paddingBottom: 0 };
 
-  const visible = calls.slice(window.startIndex, window.endIndex);
+  const visible = displayCalls.slice(window.startIndex, window.endIndex);
 
   return (
     <div className="flex flex-col gap-2">
@@ -162,7 +167,7 @@ export function FeedList({
         <div data-testid="feed-loading-more">Loading more…</div>
       ) : null}
 
-      {!hasNextPage && calls.length > 0 ? (
+      {!hasNextPage && displayCalls.length > 0 ? (
         <div data-testid="feed-end">You’re all caught up</div>
       ) : null}
     </div>
