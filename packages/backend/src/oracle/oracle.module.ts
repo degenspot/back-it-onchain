@@ -3,6 +3,8 @@ import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { OracleService } from './oracle.service';
 import { OracleController } from './oracle.controller';
+import { OracleAuditController } from './oracle-audit.controller';
+import { AuditLogService } from './audit-log.service';
 import { AdminModule } from '../admin/admin.module';
 import { IpfsModule } from '../ipfs/ipfs.module';
 import { Call } from '../calls/call.entity';
@@ -34,7 +36,7 @@ import {
     RedisModule,
     TypeOrmModule.forFeature([Call, AuditLog]),
   ],
-  controllers: [OracleController],
+  controllers: [OracleController, OracleAuditController],
   providers: [
     OracleService,
     QuorumConsensusService,
@@ -48,7 +50,7 @@ import {
     //   { provide: RELAYER_QUEUE, useValue: new BullMqRelayerQueue() }
     StellarRelayerService,
     PaymasterPolicyService,
-    DexScreenerProvider,
+DexScreenerProvider,
     GeckoTerminalProvider,
     PythStellarProvider,
     {
@@ -56,6 +58,11 @@ import {
       useFactory: (...providers: PriceProvider[]) => providers,
       inject: [DexScreenerProvider, GeckoTerminalProvider, PythStellarProvider],
     },
+    // BE-016: provided here (rather than only via AdminModule, which also
+    // provides it for `GET /admin/audit`) because only this module has
+    // IpfsService, and the archive needs it. The service is stateless, so the
+    // two instances are interchangeable.
+    AuditLogService,
     // BE-017: the transport is a seam, not a dependency. This default keeps
     // every node in one process (dev and tests). A deployment with independent
     // nodes overrides QUORUM_TRANSPORT with a RedisPubSubTransport built on its

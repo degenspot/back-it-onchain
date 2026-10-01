@@ -17,6 +17,12 @@ import { RedisClientProvider, IRedisClient } from '../config/redis.config';
 import { IpfsService } from '../ipfs/ipfs.service';
 import { Call } from '../calls/call.entity';
 import { AuditLog, AuditLogAction } from './audit-log.entity';
+import {
+  AuditLogService,
+  RawPriceEvidence,
+  ResolutionSignatureEvidence,
+} from './audit-log.service';
+import { sha256Hex } from '../common/ipfs/cid.util';
 import { IKeySigner, LocalWalletSigner, KmsSigner } from './key-signer';
 import {
   IStellarKeySigner,
@@ -28,10 +34,7 @@ import {
   buildCanonicalResolutionPayload,
   digestResolutionPayload,
 } from './key-signer';
-import {
-  QuorumConsensusService,
-  ResolutionPayload,
-} from './quorum-consensus.service';
+import { QuorumConsensusService, ResolutionPayload } from './quorum-consensus.service';
 import {
   AggregatedPrice,
   PriceProvider,
@@ -58,9 +61,7 @@ export class RpcExhaustedError extends Error {
     public readonly attempts: number,
     public readonly lastError: Error,
   ) {
-    super(
-      `"${operation}" failed after ${attempts} attempt(s): ${lastError.message}`,
-    );
+    super(`"${operation}" failed after ${attempts} attempt(s): ${lastError.message}`);
     this.name = 'RpcExhaustedError';
   }
 }
@@ -98,14 +99,8 @@ async function withRetry<T>(
 
       if (attempt === maxAttempts) break;
 
-      const raw = Math.min(
-        baseDelayMs * Math.pow(factor, attempt - 1),
-        maxDelayMs,
-      );
-      const delay = Math.max(
-        0,
-        Math.round(raw + raw * jitter * (Math.random() * 2 - 1)),
-      );
+      const raw = Math.min(baseDelayMs * Math.pow(factor, attempt - 1), maxDelayMs);
+      const delay = Math.max(0, Math.round(raw + raw * jitter * (Math.random() * 2 - 1)));
 
       logger?.warn(
         `[${operationName}] attempt ${attempt}/${maxAttempts} failed — ` +
@@ -134,30 +129,21 @@ async function withRetry<T>(
  */
 export function Retryable(optionsOrAttempts: number | RetryOptions) {
   const options: RetryOptions =
-    typeof optionsOrAttempts === 'number'
-      ? { maxAttempts: optionsOrAttempts }
-      : optionsOrAttempts;
+    typeof optionsOrAttempts === 'number' ? { maxAttempts: optionsOrAttempts } : optionsOrAttempts;
 
   return function (
     target: object,
     propertyKey: string,
     descriptor: PropertyDescriptor,
   ): PropertyDescriptor {
-    const original = descriptor.value as (
-      ...args: unknown[]
-    ) => Promise<unknown>;
+    const original = descriptor.value as (...args: unknown[]) => Promise<unknown>;
     const className = target.constructor?.name ?? 'Unknown';
-    const operationName =
-      options.operationName ?? `${className}.${propertyKey}`;
+    const operationName = options.operationName ?? `${className}.${propertyKey}`;
 
     descriptor.value = async function (...args: unknown[]) {
       // Use the instance logger if available (NestJS services have this.logger)
       const logger: Logger | undefined = (this as { logger?: Logger }).logger;
-      return withRetry(
-        () => original.apply(this, args),
-        { ...options, operationName },
-        logger,
-      );
+      return withRetry(() => original.apply(this, args), { ...options, operationName }, logger);
     };
 
     Object.defineProperty(descriptor.value, 'name', { value: propertyKey });
@@ -223,6 +209,16 @@ export interface ResolutionResult {
 }
 
 /**
+ * Out-parameter used to capture the raw provider response for the BE-016
+ * evidence archive. Passed down the DexScreener → GeckoTerminal chain instead
+ * of changing `fetchPrice()`'s return type, so every existing caller keeps
+ * receiving a plain number.
+ */
+export interface PriceCapture {
+  raw?: RawPriceEvidence;
+}
+
+/**
  * What a quorum-assisted signing attempt produced (BE-017).
  *
  * On `converged: false` nothing is signed: the caller aborts the submission
@@ -239,12 +235,7 @@ export interface QuorumOutcomeResult {
   threshold?: number;
   nodeCount?: number;
   latencyMs?: number;
-  reason?:
-    | 'timeout'
-    | 'no-nodes'
-    | 'no-transport'
-    | 'no-quorum-service'
-    | 'unknown';
+  reason?: 'timeout' | 'no-nodes' | 'no-transport' | 'no-quorum-service' | 'unknown';
   rejections?: { reason: string; signature: string; detail?: string }[];
 }
 
@@ -310,6 +301,12 @@ export class OracleService {
      * sign when it is absent rather than pretending consensus happened.
      */
     @Optional() private readonly quorum?: QuorumConsensusService,
+    /**
+     * BE-016: seals the full resolution evidence for each settled call. Optional
+     * so a deployment that only has the repository-based audit row keeps working
+     * (the legacy ad-hoc evidence pin is used instead).
+     */
+    @Optional() private readonly auditLogService?: AuditLogService,
   ) {
     this.priceProviders = priceProviders ?? [];
     this.redisClientProvider = redisClientProvider;
@@ -319,9 +316,7 @@ export class OracleService {
       this.signer = new ethers.Wallet(privateKey);
     }
 
-    const stellarSecretKey = this.configService.get<string>(
-      'STELLAR_ORACLE_SECRET_KEY',
-    );
+    const stellarSecretKey = this.configService.get<string>('STELLAR_ORACLE_SECRET_KEY');
     if (stellarSecretKey) {
       this.stellarKeypair = Keypair.fromSecret(stellarSecretKey);
     }
@@ -386,7 +381,7 @@ export class OracleService {
     baseDelayMs: 1_000,
     operationName: 'oracle:fetchPrice',
   })
-  async fetchPrice(tokenAddress: string): Promise<number> {
+  async fetchPrice(tokenAddress: string, capture?: PriceCapture): Promise<number> {
     this.logger.log(`Fetching price for ${tokenAddress}`);
 
     const url = `https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`;
@@ -404,11 +399,19 @@ export class OracleService {
 
     const data = (await response.json()) as DexScreenerResponse;
 
+    if (capture) {
+      capture.raw = {
+        source: 'dexscreener',
+        url,
+        status: response.status,
+        fetchedAt: new Date().toISOString(),
+        body: data,
+      };
+    }
+
     const pair = data?.pairs?.[0];
     if (!pair?.priceUsd) {
-      throw new Error(
-        `No price data returned by DexScreener for ${tokenAddress}`,
-      );
+      throw new Error(`No price data returned by DexScreener for ${tokenAddress}`);
     }
 
     const price = parseFloat(pair.priceUsd);
@@ -452,10 +455,9 @@ export class OracleService {
   async fetchFromGeckoTerminal(
     tokenAddress: string,
     network?: string,
+    capture?: PriceCapture,
   ): Promise<number> {
-    const net =
-      network ??
-      this.configService.get<string>('GECKOTERMINAL_NETWORK', 'base');
+    const net = network ?? this.configService.get<string>('GECKOTERMINAL_NETWORK', 'base');
     const url = `https://api.geckoterminal.com/api/v2/simple/networks/${net}/token_price/${tokenAddress}`;
 
     const response = await fetch(url, {
@@ -470,19 +472,26 @@ export class OracleService {
     }
 
     const data = (await response.json()) as GeckoTerminalResponse;
+
+    if (capture) {
+      capture.raw = {
+        source: 'geckoterminal',
+        url,
+        status: response.status,
+        fetchedAt: new Date().toISOString(),
+        body: data,
+      };
+    }
+
     const prices = data?.data?.attributes?.token_prices;
     const raw = prices?.[tokenAddress.toLowerCase()] ?? prices?.[tokenAddress];
 
     if (!raw) {
-      throw new Error(
-        `No price data returned by GeckoTerminal for ${tokenAddress}`,
-      );
+      throw new Error(`No price data returned by GeckoTerminal for ${tokenAddress}`);
     }
 
     const price = parseFloat(raw);
-    this.logger.log(
-      `GeckoTerminal fallback price for ${tokenAddress}: $${price}`,
-    );
+    this.logger.log(`GeckoTerminal fallback price for ${tokenAddress}: $${price}`);
     return price;
   }
 
@@ -497,23 +506,22 @@ export class OracleService {
   async fetchPriceWithFallback(
     tokenAddress: string,
     network?: string,
+    capture?: PriceCapture,
   ): Promise<{ price: number; source: 'dexscreener' | 'geckoterminal' }> {
     try {
-      const price = await this.fetchPrice(tokenAddress);
+      const price = await this.fetchPrice(tokenAddress, capture);
       return { price, source: 'dexscreener' };
     } catch (dexErr) {
-      const dexError =
-        dexErr instanceof Error ? dexErr : new Error(String(dexErr));
+      const dexError = dexErr instanceof Error ? dexErr : new Error(String(dexErr));
       this.logger.warn(
         `DexScreener exhausted for ${tokenAddress}, falling back to GeckoTerminal: ${dexError.message}`,
       );
 
       try {
-        const price = await this.fetchFromGeckoTerminal(tokenAddress, network);
+        const price = await this.fetchFromGeckoTerminal(tokenAddress, network, capture);
         return { price, source: 'geckoterminal' };
       } catch (geckoErr) {
-        const geckoError =
-          geckoErr instanceof Error ? geckoErr : new Error(String(geckoErr));
+        const geckoError = geckoErr instanceof Error ? geckoErr : new Error(String(geckoErr));
         throw new PriceFeedOutageError(tokenAddress, dexError, geckoError);
       }
     }
@@ -522,10 +530,7 @@ export class OracleService {
   /** Scales a USD float price into an integer string per ORACLE_PRICE_SCALE (default 1e18). */
   scalePrice(price: number): string {
     const scale = BigInt(
-      this.configService.get<string>(
-        'ORACLE_PRICE_SCALE',
-        '1000000000000000000',
-      ),
+      this.configService.get<string>('ORACLE_PRICE_SCALE', '1000000000000000000'),
     );
     // Work in integer cents-of-scale to avoid floating point drift, then
     // apply the remaining scale as a BigInt multiplication.
@@ -557,9 +562,7 @@ export class OracleService {
       );
     }
 
-    const limit =
-      batchSize ??
-      this.configService.get<number>('ORACLE_RESOLUTION_BATCH_SIZE', 20);
+    const limit = batchSize ?? this.configService.get<number>('ORACLE_RESOLUTION_BATCH_SIZE', 20);
 
     const results: ResolutionResult[] = [];
 
@@ -602,9 +605,12 @@ export class OracleService {
     call: Call,
     manager: import('typeorm').EntityManager,
   ): Promise<ResolutionResult> {
+    // BE-016: the raw provider response is captured alongside the parsed price
+    // so the sealed audit record can be re-derived by a third party.
+    const capture: PriceCapture = {};
     let priceResult: { price: number; source: 'dexscreener' | 'geckoterminal' };
     try {
-      priceResult = await this.fetchPriceWithFallback(call.tokenAddress);
+      priceResult = await this.fetchPriceWithFallback(call.tokenAddress, undefined, capture);
     } catch (err) {
       call.status = 'UNRESOLVED';
       await manager.save(Call, call);
@@ -628,45 +634,93 @@ export class OracleService {
       resolvedAt: new Date().toISOString(),
     };
 
+    const timestamp = Math.floor(Date.now() / 1000);
+    let oracleSignature: string | undefined;
+    let signatureEvidence: ResolutionSignatureEvidence | undefined;
+    try {
+      if (call.chain === 'stellar') {
+        const signed = this.signEd25519(call.id, outcome, price, timestamp);
+        oracleSignature = signed.signatureHex;
+        // The legacy ed25519 path signs an ASCII framing of the outcome, so
+        // the archived proof records those exact bytes rather than a payload
+        // the signature does not actually cover.
+        const messageBytes = Buffer.from(signed.message, 'utf-8');
+        signatureEvidence = {
+          algorithm: 'ed25519',
+          signature: signed.signatureHex,
+          kind: this.activeStellarSigner?.kind ?? 'local',
+          payloadHash: sha256Hex(messageBytes),
+          messageHex: messageBytes.toString('hex'),
+          publicKeyHex: signed.publicKeyHex,
+        };
+      } else {
+        // Pass the scaled price as a string (not Number()) — 1e18-scaled
+        // uint256 values routinely exceed Number.isSafeInteger, and ethers'
+        // typed-data encoder rejects lossy numeric conversions.
+        oracleSignature = await this.signEIP712(call.id, outcome, scaledPrice, timestamp);
+        signatureEvidence = {
+          algorithm: 'eip712',
+          signature: oracleSignature,
+          kind: this.activeSigner?.kind ?? 'local',
+          payloadHash: sha256Hex(Buffer.from(oracleSignature, 'utf-8')),
+        };
+      }
+    } catch (err) {
+      this.logger.error(`Failed to sign outcome for call ${call.id}: ${(err as Error).message}`);
+    }
+
     let evidenceCid: string | undefined;
-    if (this.ipfsService) {
+    if (this.auditLogService && signatureEvidence) {
+      // BE-016: one sealed document per settled call — the full evidence bundle,
+      // canonicalised, addressed by a locally computed CIDv1 and pinned. The
+      // audit row commits inside the settlement transaction, so a call can
+      // never end up SETTLED with no archive.
+      try {
+        const archived = await this.auditLogService.archiveResolutionEvidence(
+          {
+            callId: call.id,
+            actor: 'oracle-worker',
+            chain: call.chain,
+            resolvedAt: evidence.resolvedAt,
+            resolution: {
+              callId: call.id,
+              outcomeIndex: outcome ? 1 : 0,
+              finalPrice: scaledPrice,
+              timestamp,
+            },
+            price: { source, price, scaledPrice },
+            rawApiResponse: capture.raw,
+            condition: call.conditionJson,
+            signature: signatureEvidence,
+          },
+          manager,
+        );
+        evidenceCid = archived.cid;
+
+        this.eventEmitter?.emit('oracle.evidence.archived', {
+          callId: call.id,
+          cid: archived.cid,
+          digest: archived.digest,
+          pinned: archived.pinned,
+        });
+      } catch (err) {
+        this.logger.error(
+          `Failed to archive resolution evidence for call ${call.id}: ${(err as Error).message}`,
+        );
+      }
+    }
+
+    // Legacy path: no audit-log service wired (or no signature to archive), so
+    // keep the previous ad-hoc evidence pin rather than losing the CID entirely.
+    if (!evidenceCid && this.ipfsService) {
       try {
         evidenceCid = await this.ipfsService.pin(
           Buffer.from(JSON.stringify(evidence, null, 2)),
           `evidence-call-${call.id}.json`,
         );
       } catch (err) {
-        this.logger.error(
-          `Failed to pin evidence for call ${call.id}: ${(err as Error).message}`,
-        );
+        this.logger.error(`Failed to pin evidence for call ${call.id}: ${(err as Error).message}`);
       }
-    }
-
-    const timestamp = Math.floor(Date.now() / 1000);
-    let oracleSignature: string | undefined;
-    try {
-      if (call.chain === 'stellar') {
-        oracleSignature = this.signEd25519(
-          call.id,
-          outcome,
-          price,
-          timestamp,
-        ).signatureHex;
-      } else {
-        // Pass the scaled price as a string (not Number()) — 1e18-scaled
-        // uint256 values routinely exceed Number.isSafeInteger, and ethers'
-        // typed-data encoder rejects lossy numeric conversions.
-        oracleSignature = await this.signEIP712(
-          call.id,
-          outcome,
-          scaledPrice,
-          timestamp,
-        );
-      }
-    } catch (err) {
-      this.logger.error(
-        `Failed to sign outcome for call ${call.id}: ${(err as Error).message}`,
-      );
     }
 
     call.status = 'SETTLED';
@@ -718,13 +772,10 @@ export class OracleService {
    */
   private determineOutcome(call: Call, price: number): boolean {
     const condition = call.conditionJson as
-      | { direction?: 'above' | 'below'; targetPrice?: number }
-      | undefined;
+      { direction?: 'above' | 'below'; targetPrice?: number } | undefined;
 
     if (!condition?.direction || typeof condition.targetPrice !== 'number') {
-      this.logger.warn(
-        `Call ${call.id} has no usable conditionJson — defaulting outcome to false`,
-      );
+      this.logger.warn(`Call ${call.id} has no usable conditionJson — defaulting outcome to false`);
       return false;
     }
 
@@ -761,9 +812,7 @@ export class OracleService {
 
   /** Sends a best-effort admin alert on total price-feed outage (BE-01). */
   private async notifyAdmin(call: Call, error: Error): Promise<void> {
-    const webhookUrl = this.configService.get<string>(
-      'DISCORD_ADMIN_WEBHOOK_URL',
-    );
+    const webhookUrl = this.configService.get<string>('DISCORD_ADMIN_WEBHOOK_URL');
     const message =
       `🚨 **Oracle Resolution Failed** 🚨\n` +
       `Call ID: ${call.id} could not be resolved and was marked **UNRESOLVED**.\n` +
@@ -802,23 +851,17 @@ export class OracleService {
     timestamp: number,
   ): Promise<string> {
     if (this.adminService.isPaused()) {
-      throw new ServiceUnavailableException(
-        'Protocol is paused. Oracle signatures are disabled.',
-      );
+      throw new ServiceUnavailableException('Protocol is paused. Oracle signatures are disabled.');
     }
     if (!this.activeSigner) {
-      throw new Error(
-        'Oracle signer not configured (no ORACLE_PRIVATE_KEY or KMS_URL)',
-      );
+      throw new Error('Oracle signer not configured (no ORACLE_PRIVATE_KEY or KMS_URL)');
     }
 
     const domain = {
       name: 'OnChainSageOutcome',
       version: '1',
       chainId: this.configService.get<number>('ORACLE_CHAIN_ID', 8453),
-      verifyingContract: this.configService.get<string>(
-        'OUTCOME_MANAGER_ADDRESS',
-      ),
+      verifyingContract: this.configService.get<string>('OUTCOME_MANAGER_ADDRESS'),
     };
 
     const types = {
@@ -882,24 +925,13 @@ export class OracleService {
     timestamp: number,
   ): Promise<string> {
     if (this.adminService.isPaused()) {
-      throw new ServiceUnavailableException(
-        'Protocol is paused. Oracle signatures are disabled.',
-      );
+      throw new ServiceUnavailableException('Protocol is paused. Oracle signatures are disabled.');
     }
     if (!this.signer) throw new Error('Oracle signer not configured');
 
-    const payload = this.outcomeTypedData(
-      callId,
-      outcome,
-      finalPrice,
-      timestamp,
-    );
+    const payload = this.outcomeTypedData(callId, outcome, finalPrice, timestamp);
 
-    return this.signer.signTypedData(
-      payload.domain,
-      payload.types,
-      payload.value,
-    );
+    return this.signer.signTypedData(payload.domain, payload.types, payload.value);
   }
 
   /**
@@ -921,9 +953,7 @@ export class OracleService {
         name: 'OnChainSageOutcome',
         version: '1',
         chainId: 84532, // Base Sepolia
-        verifyingContract: this.configService.get<string>(
-          'OUTCOME_MANAGER_ADDRESS',
-        ),
+        verifyingContract: this.configService.get<string>('OUTCOME_MANAGER_ADDRESS'),
       },
       types: {
         Outcome: [
@@ -955,12 +985,7 @@ export class OracleService {
     timestamp: number,
     overrides: { timeoutMs?: number; threshold?: number } = {},
   ): Promise<QuorumOutcomeResult> {
-    const payload = this.outcomeTypedData(
-      callId,
-      outcome,
-      finalPrice,
-      timestamp,
-    );
+    const payload = this.outcomeTypedData(callId, outcome, finalPrice, timestamp);
 
     if (!this.quorum) {
       this.logger.warn(
@@ -983,12 +1008,7 @@ export class OracleService {
       };
     }
 
-    const signature = await this.signOutcome(
-      callId,
-      outcome,
-      finalPrice,
-      timestamp,
-    );
+    const signature = await this.signOutcome(callId, outcome, finalPrice, timestamp);
 
     this.logger.log(
       `call ${callId}: quorum reached in ${result.latencyMs}ms (${result.signers.length}/${result.threshold} nodes, payload ${result.payloadHash})`,
@@ -1050,13 +1070,9 @@ export class OracleService {
    * `env.crypto().ed25519_verify(&oracle_pubkey, &message, &signature)` inside
    * `submit_outcome`.
    */
-  async signResolution(
-    payload: StellarResolutionPayload,
-  ): Promise<StellarSignature> {
+  async signResolution(payload: StellarResolutionPayload): Promise<StellarSignature> {
     if (this.adminService.isPaused()) {
-      throw new ServiceUnavailableException(
-        'Protocol is paused. Oracle signatures are disabled.',
-      );
+      throw new ServiceUnavailableException('Protocol is paused. Oracle signatures are disabled.');
     }
     if (!this.activeStellarSigner) {
       throw new Error(
@@ -1079,9 +1095,7 @@ export class OracleService {
     finalPrice: number | string | bigint,
     timestamp: number,
   ): Promise<StellarSignature> {
-    return this.signResolution(
-      this.buildResolutionPayload(callId, outcome, finalPrice, timestamp),
-    );
+    return this.signResolution(this.buildResolutionPayload(callId, outcome, finalPrice, timestamp));
   }
 
   /**
@@ -1106,9 +1120,7 @@ export class OracleService {
     timestamp: number,
   ): Buffer {
     if (this.adminService.isPaused()) {
-      throw new ServiceUnavailableException(
-        'Protocol is paused. Oracle signatures are disabled.',
-      );
+      throw new ServiceUnavailableException('Protocol is paused. Oracle signatures are disabled.');
     }
     if (!this.stellarKeypair) {
       throw new Error('Stellar keypair not configured');
@@ -1153,20 +1165,13 @@ export class OracleService {
     timestamp: number,
   ): { signatureHex: string; publicKeyHex: string; message: string } {
     if (this.adminService.isPaused()) {
-      throw new ServiceUnavailableException(
-        'Protocol is paused. Oracle signatures are disabled.',
-      );
+      throw new ServiceUnavailableException('Protocol is paused. Oracle signatures are disabled.');
     }
     if (!this.stellarKeypair) {
       throw new Error('Stellar keypair not configured');
     }
 
-    const message = this.buildStellarMessage(
-      callId,
-      outcome,
-      finalPrice,
-      timestamp,
-    );
+    const message = this.buildStellarMessage(callId, outcome, finalPrice, timestamp);
     const messageBytes = Buffer.from(message, 'utf-8');
 
     // rawSecretKey() returns the 32-byte ed25519 seed; tweetnacl derives the
@@ -1174,10 +1179,7 @@ export class OracleService {
     const seed = this.stellarKeypair.rawSecretKey();
     const naclKeyPair = nacl.sign.keyPair.fromSeed(new Uint8Array(seed));
 
-    const signature = nacl.sign.detached(
-      new Uint8Array(messageBytes),
-      naclKeyPair.secretKey,
-    );
+    const signature = nacl.sign.detached(new Uint8Array(messageBytes), naclKeyPair.secretKey);
 
     return {
       signatureHex: Buffer.from(signature).toString('hex'),
@@ -1187,11 +1189,7 @@ export class OracleService {
   }
 
   /** Verifies a signature produced by signEd25519() — used in tests and admin tooling. */
-  verifyEd25519(
-    message: string,
-    signatureHex: string,
-    publicKeyHex: string,
-  ): boolean {
+  verifyEd25519(message: string, signatureHex: string, publicKeyHex: string): boolean {
     return nacl.sign.detached.verify(
       new Uint8Array(Buffer.from(message, 'utf-8')),
       new Uint8Array(Buffer.from(signatureHex, 'hex')),
@@ -1218,12 +1216,7 @@ export class OracleService {
     timestamp: number,
   ): Promise<string> {
     if (chain === 'stellar') {
-      const signature = this.signStellarOutcome(
-        callId,
-        outcome,
-        finalPrice,
-        timestamp,
-      );
+      const signature = this.signStellarOutcome(callId, outcome, finalPrice, timestamp);
       return signature.toString('base64');
     }
 
