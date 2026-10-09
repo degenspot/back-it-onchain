@@ -11,6 +11,8 @@ import { Call } from './call.entity';
 import { Participant } from './participant.entity';
 import { Dispute } from './dispute.entity';
 import { IpfsService } from '../ipfs/ipfs.service';
+import { AuditLogService } from '../oracle/audit-log.service';
+import { AuditLogAction } from '../oracle/audit-log.entity';
 
 type CallsListOptions = {
   chain?: 'base' | 'stellar';
@@ -34,15 +36,43 @@ type CallResponse = {
 
 // ── Lifecycle helpers ─────────────────────────────────────────────────────────
 
-/** Valid call statuses in lifecycle order. */
-export type CallStatus = 'OPEN' | 'SETTLING' | 'RESOLVED' | 'UNRESOLVED' | 'STALE';
+/**
+ * Valid call statuses in lifecycle order.
+ *
+ * The oracle and the dispute system both write statuses outside the original
+ * #300 machine (`SETTLED`, `RESOLUTION_HALTED`, `DISPUTED`, `OVERTURNED`).
+ * They have to be listed here or `updateStatus` rejects its own service's
+ * writes as an illegal transition.
+ */
+export type CallStatus =
+  | 'OPEN'
+  | 'SETTLING'
+  | 'SETTLED'
+  | 'RESOLVED'
+  | 'UNRESOLVED'
+  | 'STALE'
+  // BE-018: frozen because the price could not be trusted. Recoverable by an
+  // admin unfreeze, which is the only way out — it must not re-enter SETTLING on
+  // its own, or the guard that froze it would just freeze it again.
+  | 'RESOLUTION_HALTED'
+  // BE-019: a dispute is open or with governance. The call is still settled
+  // underneath; this is a marker, not a replacement for the resolution.
+  | 'DISPUTED'
+  // BE-019: governance overturned the settlement.
+  | 'OVERTURNED';
 
 const ALLOWED_TRANSITIONS: Record<CallStatus, CallStatus[]> = {
   OPEN: ['SETTLING'],
-  SETTLING: ['RESOLVED', 'UNRESOLVED'],
+  SETTLING: ['SETTLED', 'RESOLVED', 'UNRESOLVED', 'RESOLUTION_HALTED'],
+  SETTLED: ['DISPUTED', 'OVERTURNED'],
   RESOLVED: [],
   UNRESOLVED: ['SETTLING'], // admin force-retry
   STALE: ['SETTLING'],      // admin force-unresolve path
+  // Only an admin unfreeze moves a frozen call, and it goes back to OPEN so the
+  // guard is re-evaluated from a clean slate rather than resuming mid-flight.
+  RESOLUTION_HALTED: ['OPEN'],
+  DISPUTED: ['SETTLED', 'OVERTURNED'],
+  OVERTURNED: [],
 };
 
 function assertTransition(current: CallStatus, next: CallStatus): void {
@@ -86,6 +116,7 @@ export class CallsService {
     private disputesRepository: Repository<Dispute>,
     private readonly ipfsService: IpfsService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly auditLogService: AuditLogService,
   ) {}
 
   // ── Standard CRUD ─────────────────────────────────────────────────────────
@@ -324,74 +355,70 @@ export class CallsService {
     return { callId, outcome: call.outcome, totalPool, feeBps, netPool, payouts };
   }
 
-  // ── Issue #302: Dispute workflow ──────────────────────────────────────────
+  // ── Frozen-call recovery (BE-018) ────────────────────────────────────────
 
-  /** Raise a dispute for a call that is currently in SETTLING status. */
-  async raiseDispute(
+  /**
+   * Admin: unfreeze a call that the staleness guard froze.
+   *
+   * Returns the call to `OPEN` so the next resolution sweep picks it up. It is
+   * deliberately *not* settled here: the operator's job is to decide the feed
+   * is trustworthy again, and the oracle still has to fetch and evaluate a
+   * price. Unfreezing therefore re-enters the ordinary path, including the
+   * staleness check — if the feed is still bad, the call re-freezes itself
+   * rather than settling on the same bad price. That is the intended
+   * behaviour: an unfreeze is a claim that the *cause* is fixed, and the
+   * oracle verifies the claim.
+   */
+  async unfreezeResolution(
     callId: number,
-    raiserWallet: string,
-    bondAmount: number,
-  ): Promise<Dispute> {
+    adminWallet: string,
+    note?: string,
+  ): Promise<Call> {
     const call = await this.callsRepository.findOne({ where: { id: callId } });
     if (!call) throw new NotFoundException('Call not found');
-    if (call.status !== 'SETTLING') {
-      throw new BadRequestException('Disputes can only be raised during SETTLING status');
+    if (call.status !== 'RESOLUTION_HALTED') {
+      throw new BadRequestException(
+        `Call ${callId} is ${call.status}, not RESOLUTION_HALTED — nothing to unfreeze`,
+      );
     }
 
-    const dispute = this.disputesRepository.create({
-      callId,
-      raiserWallet,
-      bondAmount,
-      status: 'OPEN',
-    });
-    const saved = await this.disputesRepository.save(dispute);
+    const previousReason = call.resolutionHaltedReason;
+    call.status = 'OPEN';
+    call.resolutionHaltedReason = null;
+    call.statusUpdatedAt = new Date();
+    const saved = await this.callsRepository.save(call);
 
-    this.eventEmitter.emit('dispute.raised', {
-      marketId: String(call.callOnchainId ?? call.id),
+    if (this.auditLogService) {
+      await this.auditLogService.append({
+        callId: String(callId),
+        action: AuditLogAction.ORACLE_RESOLUTION_UNFROZEN,
+        actor: adminWallet,
+        payloadHash: JSON.stringify({ previousReason, note }),
+      });
+    }
+
+    this.eventEmitter.emit('oracle.resolution_unfrozen', {
       callId: String(callId),
-      staker: raiserWallet,
-      bondAmount: String(bondAmount),
-      disputedAt: Date.now(),
+      marketId: String(call.callOnchainId ?? callId),
+      adminWallet,
+      previousReason,
     });
 
     return saved;
   }
 
-  /** Admin: resolve an open dispute. */
-  async resolveDispute(
-    disputeId: string,
-    adminWallet: string,
-    upheld: boolean,
-  ): Promise<Dispute> {
-    const dispute = await this.disputesRepository.findOne({
-      where: { id: disputeId },
-      relations: ['call'],
+  /**
+   * Calls frozen by the staleness guard, most recent first.
+   *
+   * Exposed so an operator can see what needs attention instead of having to
+   * know the status is filterable.
+   */
+  async findHaltedCalls(limit = 50): Promise<Call[]> {
+    return this.callsRepository.find({
+      where: { status: 'RESOLUTION_HALTED' },
+      order: { statusUpdatedAt: 'DESC' },
+      take: Math.min(Math.max(limit, 1), 200),
     });
-    if (!dispute) throw new NotFoundException('Dispute not found');
-    if (dispute.status !== 'OPEN') {
-      throw new BadRequestException('Dispute is already resolved');
-    }
-
-    dispute.status = 'RESOLVED';
-    dispute.resolvedBy = adminWallet;
-    dispute.upheld = upheld;
-    const saved = await this.disputesRepository.save(dispute);
-
-    const call = dispute.call as Call;
-    this.eventEmitter.emit('dispute.resolved', {
-      marketId: String(call?.callOnchainId ?? dispute.callId),
-      callId: String(dispute.callId),
-      staker: dispute.raiserWallet,
-      resolution: upheld ? 'upheld' : 'rejected',
-      finalOutcomeCode: 0,
-      resolvedAt: Date.now(),
-    });
-
-    return saved;
-  }
-
-  async findDisputesByCall(callId: number): Promise<Dispute[]> {
-    return this.disputesRepository.find({ where: { callId } });
   }
 }
 

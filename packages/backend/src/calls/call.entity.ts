@@ -64,6 +64,12 @@ export class Call {
   @Column({ default: 'OPEN' })
   status: string;
 
+  @Column({ type: 'timestamptz', nullable: true })
+  statusUpdatedAt: Date;
+
+  @Column({ type: 'text', nullable: true })
+  resolutionHaltedReason: string | null;
+
   @Column({ nullable: true })
   outcome: boolean;
 
@@ -75,6 +81,22 @@ export class Call {
 
   @Column({ nullable: true })
   evidenceCid: string;
+
+  /**
+   * When the oracle settled this call. Anchors the 24 h dispute window
+   * (BE-019), so it has to be recorded at settlement rather than inferred from
+   * `updatedAt` — which moves on every later edit.
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  settledAt: Date | null;
+
+  /** Set when a dispute is escalated to governance. */
+  @Column({ type: 'timestamptz', nullable: true })
+  disputedAt: Date | null;
+
+  /** Open dispute, if any. One active dispute per call. */
+  @Column({ type: 'uuid', nullable: true })
+  activeDisputeId: string | null;
 
   @Column({ default: 'base' })
   chain: 'base' | 'stellar';

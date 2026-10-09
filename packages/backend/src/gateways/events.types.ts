@@ -8,6 +8,8 @@ import { Socket } from 'socket.io';
 export interface AuthenticatedSocket extends Socket {
   data: {
     userId: string | null;
+    /** When this connection authenticated, for connection-age diagnostics. */
+    authenticatedAt?: number;
   };
 }
 
@@ -53,6 +55,25 @@ export interface DisputeResolvedEvent {
   finalOutcomeCode: number;
   resolvedAt: number;
   txHash?: string;
+}
+
+// ── Disputes (BE-019) ─────────────────────────────────────────────────────
+
+export interface DisputeEscalatedEvent {
+  disputeId: string;
+  callId: string;
+  /** On-chain market id, which may differ from the internal call id. */
+  marketId?: string;
+  totalBond: string;
+  quorum: number;
+  voteDeadlineAt: string;
+}
+
+export interface DisputeDecisionEvent {
+  disputeId: string;
+  callId: string;
+  totalBond: string;
+  reason: string;
 }
 
 export interface UserNotificationEvent {
