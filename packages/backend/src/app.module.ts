@@ -17,6 +17,9 @@ import { Call } from './calls/call.entity';
 import { Participant } from './calls/participant.entity';
 import { StakeActivity } from './calls/stake-activity.entity';
 import { Dispute } from './calls/dispute.entity';
+import { DisputeStake } from './calls/dispute-stake.entity';
+import { DisputeEvidence } from './calls/dispute-evidence.entity';
+import { DisputeApproval } from './calls/dispute-approval.entity';
 import { AuthModule } from './auth/auth.module';
 import { CallsModule } from './calls/calls.module';
 import { OracleModule } from './oracle/oracle.module';
@@ -87,6 +90,9 @@ import { stellarConfig } from './config/stellar.config';
           Participant,
           StakeActivity,
           Dispute,
+          DisputeStake,
+          DisputeEvidence,
+          DisputeApproval,
           UserFollows,
           UserSettings,
           Notification,

@@ -1069,7 +1069,16 @@ describe('OracleService', () => {
       });
 
       const result = await service.fetchPriceWithFallback('0xtoken');
-      expect(result).toEqual({ price: 42, source: 'dexscreener' });
+      // BE-018 widened the return contract: the oracle now also needs the 24h
+      // volume to decide whether the market is liquid enough to settle on.
+      // DexScreener still publishes no observation timestamp, so freshness
+      // falls back to observed price change.
+      expect(result).toEqual({
+        price: 42,
+        source: 'dexscreener',
+        volume24h: 1,
+      });
+      expect(result.timestamp).toBeUndefined();
       expect((global.fetch as jest.Mock).mock.calls.length).toBe(1);
     });
 
